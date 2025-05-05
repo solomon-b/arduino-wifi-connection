@@ -40,32 +40,16 @@
 
         packages = rec {
           build = pkgs.writeShellScriptBin "build" ''
-            ${arduino-cli}/bin/arduino-cli compile --fqbn arduino:mbed_giga:giga .
+            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga .
           '';
 
           load = pkgs.writeShellScriptBin "load" ''
-            ${arduino-cli}/bin/arduino-cli compile --fqbn arduino:mbed_giga:giga .
+            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga .
             ${arduino-cli}/bin/arduino-cli upload --port /dev/ttyACM0 --fqbn arduino:mbed_giga:giga .
           '';
 
           monitor = pkgs.writeShellScriptBin "monitor" ''
-            # Set your serial device and baud rate
-            DEVICE="/dev/ttyACM0"
-            BAUD="9600"
-
-            # Use stty to configure the serial port
-            stty -F "$DEVICE" cs8 "$BAUD" igncr -ixon -icanon -echo
-
-            # Trap Ctrl-C (SIGINT) to clean up
-            cleanup() {
-              echo -e "\nExiting..."
-              stty -F "$DEVICE" sane
-              exit 0
-            }
-            trap cleanup SIGINT
-
-            # Read from the serial port
-            cat "$DEVICE"
+            ${arduino-cli}/bin/arduino-cli monitor -p /dev/ttyACM0 -- fqbn arduino:mbed_giga:giga
           '';
 
           arduino-cli = pkgs.wrapArduinoCLI {
