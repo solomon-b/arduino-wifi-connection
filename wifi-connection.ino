@@ -11,10 +11,18 @@ char ssid[64] = {0};
 char pass[64] = {0};
 int status = WL_IDLE_STATUS;
 
+const int power_led_pin = 2;
+const int wifi_led_pin = 3;
+
 //----------------------------------------------------------------------------//
 
 void setup() {
-  Serial.begin(9600);
+  pinMode(wifi_led_pin, OUTPUT);
+  pinMode(power_led_pin, OUTPUT);
+  digitalWrite(power_led_pin, HIGH);
+  digitalWrite(wifi_led_pin, LOW);
+
+  Serial.begin(115200);
   while (!Serial);
 
   delay(1000);
@@ -139,16 +147,12 @@ void connectWiFi() {
   Serial.println(ssid);
 
   status = WiFi.begin(ssid, pass);
-  for (int i = 0; i < 20 && status != WL_CONNECTED; i++) {
-    delay(1000);
-    status = WiFi.status();
-    Serial.print(".");
-  }
 
-  if (status == WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED) {
+    digitalWrite(wifi_led_pin, HIGH);
     Serial.println("\nConnected!");
-    Serial.println(WiFi.localIP());
   } else {
+    digitalWrite(wifi_led_pin, LOW);
     Serial.println("\nFailed to connect.");
   }
 }
@@ -156,8 +160,8 @@ void connectWiFi() {
 //----------------------------------------------------------------------------//
 
 void loop() {
-  delay(5000);
   printCurrentNet();
+  delay(500 );
 }
 
 void printCurrentNet() {
