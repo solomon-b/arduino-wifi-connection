@@ -1,4 +1,10 @@
-# Ensure you have the correct Arduino udevs setup on your machine
+# Arduino Giga R1 Demo App
+
+Set an SSID and password via the serial connection then connect to the wifi
+network. When connected an LED on Digital Pin 3 is activated. The SSID and
+password are persisted via `KVStore.h`.
+
+## Ensure you have the correct Arduino udevs setup on your machine
 
 ```
   # Arduino Giga R1 UDEV Rule
