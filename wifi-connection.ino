@@ -22,15 +22,33 @@ void setup() {
   digitalWrite(power_led_pin, HIGH);
   digitalWrite(wifi_led_pin, LOW);
 
-  Serial.begin(115200);
+  Serial.begin(9600);
   while (!Serial);
 
   delay(1000);
 
+  Serial.println("Checking WiFi module...");
+  if (WiFi.status() == WL_NO_MODULE) {
+    Serial.println("ERROR: WiFi module not detected!");
+    while (true) {
+      digitalWrite(wifi_led_pin, HIGH);
+      delay(100);
+      digitalWrite(wifi_led_pin, LOW);
+      delay(100);
+    }
+  }
+  
+  Serial.print("WiFi module status: ");
+  Serial.println(WiFi.status());
+  
+  // Get firmware version
+  Serial.print("WiFi firmware: ");
+  Serial.println(WiFi.firmwareVersion());
+
   if (!loadCredentials()) {
     Serial.println("No stored credentials.");
     promptForCredentials();
- }
+  }
 
   connectWiFi();
 }
@@ -143,25 +161,104 @@ void promptForCredentials() {
 }
 
 void connectWiFi() {
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
+  Serial.print("Connecting to SSID: '");
+  Serial.print(ssid);
+  Serial.print("' (length: ");
+  Serial.print(strlen(ssid));
+  Serial.println(")");
+  
+  // Scan for networks first
+  Serial.println("Scanning for networks...");
+  Serial.println("This may take 10-15 seconds...");
+  int numNetworks = WiFi.scanNetworks();
+  Serial.print("Scan completed. Found ");
+  Serial.print(numNetworks);
+  Serial.println(" networks:");
+  
+  if (numNetworks == 0) {
+    Serial.println("No networks found. Possible issues:");
+    Serial.println("1. WiFi antenna not connected");
+    Serial.println("2. WiFi module hardware problem"); 
+    Serial.println("3. Distance from access point too far");
+    Serial.println("4. WiFi module not properly initialized");
+  }
+  
+  bool networkFound = false;
+  for (int i = 0; i < numNetworks; i++) {
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.print(WiFi.SSID(i));
+    Serial.print(" (");
+    Serial.print(WiFi.RSSI(i));
+    Serial.println(" dBm)");
+    
+    if (strcmp(WiFi.SSID(i), ssid) == 0) {
+      networkFound = true;
+      Serial.println("  ^ Target network found!");
+    }
+  }
+  
+  if (!networkFound) {
+    Serial.println("ERROR: Target network not found in scan!");
+    digitalWrite(wifi_led_pin, LOW);
+    return;
+  }
 
   status = WiFi.begin(ssid, pass);
+
+  // Wait for connection with timeout
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(1000);
+    Serial.print(".");
+    attempts++;
+  }
 
   if (WiFi.status() == WL_CONNECTED) {
     digitalWrite(wifi_led_pin, HIGH);
     Serial.println("\nConnected!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
   } else {
     digitalWrite(wifi_led_pin, LOW);
     Serial.println("\nFailed to connect.");
+    Serial.print("WiFi status: ");
+    Serial.println(WiFi.status());
   }
 }
 
 //----------------------------------------------------------------------------//
 
 void loop() {
-  printCurrentNet();
-  delay(500 );
+  if (WiFi.status() == WL_CONNECTED) {
+    printCurrentNet();
+    if (Serial.available()) {
+      char input = Serial.read();
+      if (input == 'c' || input == 'C') {
+        Serial.println("Entering new credentials...");
+        promptForCredentials();
+        connectWiFi();
+      }
+      // Clear any remaining input
+      while (Serial.available()) Serial.read();
+    }
+  } else {
+    Serial.println("Not connected. Send 'r' to retry or 'c' to change credentials.");
+    if (Serial.available()) {
+      char input = Serial.read();
+      if (input == 'r' || input == 'R') {
+        Serial.println("Retrying connection...");
+        connectWiFi();
+      } else if (input == 'c' || input == 'C') {
+        Serial.println("Entering new credentials...");
+        promptForCredentials();
+        connectWiFi();
+      }
+      // Clear any remaining input
+      while (Serial.available()) Serial.read();
+    }
+  }
+  delay(500);
 }
 
 void printCurrentNet() {
@@ -184,6 +281,8 @@ void printCurrentNet() {
   byte encryption = WiFi.encryptionType();
   Serial.print("Encryption Type:");
   Serial.println(encryption, HEX);
+  
+  Serial.println("Send 'c' to change credentials.");
   Serial.println();
 }
 
