@@ -69,22 +69,6 @@
   #define DEBUG_PRINTLN(x)  // Compiles to nothing
 #endif
 
-// Helper function to convert enum values to human-readable strings
-// Only compiled when DEBUG_ENABLED=1 to save memory in production
-// Debug helper: Convert AppMode enum to human-readable string
-// Only compiled when DEBUG_ENABLED=1 to save memory in production
-#if DEBUG_ENABLED
-const char* getModeString(AppMode mode) {
-  switch (mode) {
-    case MODE_INITIALIZING: return "INITIALIZING";            // Startup phase
-    case MODE_CONNECTING: return "CONNECTING";                // WiFi connection in progress
-    case MODE_CONNECTED: return "CONNECTED";                  // Successfully connected
-    case MODE_DISCONNECTED: return "DISCONNECTED";            // Not connected to WiFi
-    case MODE_ENTERING_CREDENTIALS: return "ENTERING_CREDENTIALS"; // User typing credentials
-    default: return "UNKNOWN";                               // Invalid mode (shouldn't happen)
-  }
-}
-#endif
 
 //----------------------------------------------------------------------------//
 // Hardware Constants
@@ -296,6 +280,25 @@ struct Action {
  * to hold the current state. All state changes go through the reducer.
  */
 AppState g_currentState;  // The one and only source of truth for app state
+
+//----------------------------------------------------------------------------//
+// Debug Helper Functions  
+//----------------------------------------------------------------------------//
+
+// Helper function to convert enum values to human-readable strings
+// Only compiled when DEBUG_ENABLED=1 to save memory in production
+#if DEBUG_ENABLED
+const char* getModeString(AppMode mode) {
+  switch (mode) {
+    case MODE_INITIALIZING: return "INITIALIZING";            // Startup phase
+    case MODE_CONNECTING: return "CONNECTING";                // WiFi connection in progress
+    case MODE_CONNECTED: return "CONNECTED";                  // Successfully connected
+    case MODE_DISCONNECTED: return "DISCONNECTED";            // Not connected to WiFi
+    case MODE_ENTERING_CREDENTIALS: return "ENTERING_CREDENTIALS"; // User typing credentials
+    default: return "UNKNOWN";                               // Invalid mode (shouldn't happen)
+  }
+}
+#endif
 
 //----------------------------------------------------------------------------//
 
