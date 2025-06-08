@@ -3,16 +3,122 @@
 #include <mbed_error.h>
 
 //----------------------------------------------------------------------------//
+// Constants
+//----------------------------------------------------------------------------//
 
 const char* KEY_SSID = "wifi_ssid";
 const char* KEY_PASS = "wifi_pass";
 
-char ssid[64] = {0};
-char pass[64] = {0};
-int status = WL_IDLE_STATUS;
-
 const int power_led_pin = 2;
 const int wifi_led_pin = 3;
+
+//----------------------------------------------------------------------------//
+// Types
+//----------------------------------------------------------------------------//
+
+enum ActionType {
+  ACTION_NONE,
+  ACTION_RETRY_CONNECTION,
+  ACTION_REQUEST_CREDENTIALS,
+  ACTION_CREDENTIALS_ENTERED,
+  ACTION_CONNECTION_STARTED,
+  ACTION_WIFI_CONNECTED,
+  ACTION_WIFI_DISCONNECTED,
+  ACTION_TICK
+};
+
+struct Credentials {
+  char ssid[64];
+  char pass[64];
+  
+  bool isEmpty() const {
+    return ssid[0] == '\0';
+  }
+  
+  bool isValid() const {
+    return strlen(ssid) > 0 && strlen(ssid) < 64 && 
+           strlen(pass) > 0 && strlen(pass) < 64;
+  }
+};
+
+enum AppMode {
+  MODE_INITIALIZING,
+  MODE_CONNECTING,
+  MODE_CONNECTED,
+  MODE_DISCONNECTED,
+  MODE_ENTERING_CREDENTIALS
+};
+
+struct AppState {
+  Credentials credentials;
+  AppMode mode;
+  int wifiStatus;
+  unsigned long lastUpdate;
+  bool credentialsChanged;
+  bool shouldReconnect;
+  
+  AppState() : mode(MODE_INITIALIZING), wifiStatus(WL_IDLE_STATUS), 
+               lastUpdate(0), credentialsChanged(false), shouldReconnect(false) {
+    credentials.ssid[0] = '\0';
+    credentials.pass[0] = '\0';
+  }
+};
+
+struct Action {
+  ActionType type;
+  Credentials newCredentials;
+  int wifiStatus;
+  
+  static Action none() {
+    Action a;
+    a.type = ACTION_NONE;
+    return a;
+  }
+  
+  static Action retryConnection() {
+    Action a;
+    a.type = ACTION_RETRY_CONNECTION;
+    return a;
+  }
+  
+  static Action requestCredentials() {
+    Action a;
+    a.type = ACTION_REQUEST_CREDENTIALS;
+    return a;
+  }
+  
+  static Action credentialsEntered(const Credentials& creds) {
+    Action a;
+    a.type = ACTION_CREDENTIALS_ENTERED;
+    a.newCredentials = creds;
+    return a;
+  }
+  
+  static Action connectionStarted() {
+    Action a;
+    a.type = ACTION_CONNECTION_STARTED;
+    return a;
+  }
+  
+  static Action wifiStatusChanged(int status) {
+    Action a;
+    a.type = (status == WL_CONNECTED) ? ACTION_WIFI_CONNECTED : ACTION_WIFI_DISCONNECTED;
+    a.wifiStatus = status;
+    return a;
+  }
+  
+  static Action tick() {
+    Action a;
+    a.type = ACTION_TICK;
+    return a;
+  }
+};
+
+//----------------------------------------------------------------------------//
+// State
+//----------------------------------------------------------------------------//
+
+AppState g_currentState;
 
 //----------------------------------------------------------------------------//
 
@@ -45,15 +151,18 @@ void setup() {
   Serial.print("WiFi firmware: ");
   Serial.println(WiFi.firmwareVersion());
 
-  if (!loadCredentials()) {
+  if (!loadCredentials(&g_currentState.credentials)) {
     Serial.println("No stored credentials.");
-    promptForCredentials();
+    dispatch(Action::requestCredentials());
+  } else {
+    dispatch(Action::retryConnection());
   }
-
-  connectWiFi();
 }
 
-void saveCredentials(const char* s, const char* p) {
+void saveCredentials(const Credentials* creds) {
+  const char* s = creds->ssid;
+  const char* p = creds->pass;
+  
   size_t ssid_size = strlen(s) + 1;
   int set_ssid_result = kv_set(KEY_SSID, s, ssid_size, 0);
 
@@ -73,7 +182,7 @@ void saveCredentials(const char* s, const char* p) {
   }
 }
 
-bool loadCredentials() {
+bool loadCredentials(Credentials* creds) {
   kv_info_t ssid_buffer;
   kv_info_t pass_buffer;
 
@@ -92,16 +201,16 @@ bool loadCredentials() {
     while (true) {}
   }
 
-  memset(ssid, 0, sizeof(ssid));
-  int read_ssid_result = kv_get(KEY_SSID, ssid, ssid_buffer.size, nullptr);
+  memset(creds->ssid, 0, sizeof(creds->ssid));
+  int read_ssid_result = kv_get(KEY_SSID, creds->ssid, ssid_buffer.size, nullptr);
 
   if (read_ssid_result != MBED_SUCCESS) {
     Serial.print("'kv_get(KEY_SSID, ssid, sizeof(ssid), nullptr);' failed with error code ");
     Serial.println(read_ssid_result);
     while (true) {}
   }
-  memset(pass, 0, sizeof(pass));
-  int read_pass_result = kv_get(KEY_PASS, pass, pass_buffer.size, nullptr);
+  memset(creds->pass, 0, sizeof(creds->pass));
+  int read_pass_result = kv_get(KEY_PASS, creds->pass, pass_buffer.size, nullptr);
 
   if (read_pass_result != MBED_SUCCESS) {
     Serial.print("'kv_get(KEY_PASS, pass, sizeof(ssid), nullptr);' failed with error code ");
@@ -116,7 +225,39 @@ void flushSerialInput() {
   while (Serial.available()) Serial.read();
 }
 
-void promptForCredentials() {
+bool promptForCredentialsBlocking(Credentials* creds) {
+  flushSerialInput();
+
+  // Read SSID
+  Serial.println("Enter SSID:");
+  while (!Serial.available());
+  String ssid_str = Serial.readStringUntil('\n');
+  ssid_str.trim();
+
+  if (!isValidCredentialLength(ssid_str)) {
+    Serial.println("Invalid SSID length. Aborting.");
+    return false;
+  }
+
+  ssid_str.toCharArray(creds->ssid, sizeof(creds->ssid));
+  flushSerialInput();
+
+  // Read Password  
+  Serial.println("Enter Password:");
+  while (!Serial.available());
+  String pass_str = Serial.readStringUntil('\n');
+  pass_str.trim();
+
+  if (!isValidCredentialLength(pass_str)) {
+    Serial.println("Invalid password length. Aborting.");
+    return false;
+  }
+
+  pass_str.toCharArray(creds->pass, sizeof(creds->pass));
+  return true;
+}
+
+void promptForCredentials(Credentials* creds) {
   flushSerialInput();
 
   // Read SSID
@@ -128,7 +269,7 @@ void promptForCredentials() {
   ssid_str.trim();
 
   // Validate length
-  if (ssid_str.length() == 0 || ssid_str.length() >= 64) {
+  if (!isValidCredentialLength(ssid_str)) {
     Serial.println("Invalid SSID length. Not saving.");
     return;
   }
@@ -145,7 +286,7 @@ void promptForCredentials() {
   String pass_str = Serial.readStringUntil('\n');
   pass_str.trim();
 
-  if (pass_str.length() == 0 || pass_str.length() >= 64) {
+  if (!isValidCredentialLength(pass_str)) {
     Serial.println("Invalid password length. Not saving.");
     return;
   }
@@ -153,18 +294,18 @@ void promptForCredentials() {
   char pass_buf[64] = {0};
   pass_str.toCharArray(pass_buf, sizeof(pass_buf));
 
-  // Update global buffers
-  strncpy(ssid, ssid_buf, sizeof(ssid));
-  strncpy(pass, pass_buf, sizeof(pass));
+  // Update credentials struct
+  strncpy(creds->ssid, ssid_buf, sizeof(creds->ssid));
+  strncpy(creds->pass, pass_buf, sizeof(creds->pass));
 
-  saveCredentials(ssid_buf, pass_buf);
+  saveCredentials(creds);
 }
 
-void connectWiFi() {
+void connectWiFi(const Credentials* creds) {
   Serial.print("Connecting to SSID: '");
-  Serial.print(ssid);
+  Serial.print(creds->ssid);
   Serial.print("' (length: ");
-  Serial.print(strlen(ssid));
+  Serial.print(strlen(creds->ssid));
   Serial.println(")");
   
   // Scan for networks first
@@ -192,7 +333,7 @@ void connectWiFi() {
     Serial.print(WiFi.RSSI(i));
     Serial.println(" dBm)");
     
-    if (strcmp(WiFi.SSID(i), ssid) == 0) {
+    if (strcmp(WiFi.SSID(i), creds->ssid) == 0) {
       networkFound = true;
       Serial.println("  ^ Target network found!");
     }
@@ -204,61 +345,287 @@ void connectWiFi() {
     return;
   }
 
-  status = WiFi.begin(ssid, pass);
-
-  // Wait for connection with timeout
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(1000);
-    Serial.print(".");
-    attempts++;
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    digitalWrite(wifi_led_pin, HIGH);
-    Serial.println("\nConnected!");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    digitalWrite(wifi_led_pin, LOW);
-    Serial.println("\nFailed to connect.");
-    Serial.print("WiFi status: ");
-    Serial.println(WiFi.status());
-  }
+  Serial.println("Starting WiFi connection...");
+  WiFi.begin(creds->ssid, creds->pass);
+  
+  // Don't block - let the tick system handle status updates
 }
 
 //----------------------------------------------------------------------------//
 
-void loop() {
-  if (WiFi.status() == WL_CONNECTED) {
-    printCurrentNet();
-    if (Serial.available()) {
-      char input = Serial.read();
-      if (input == 'c' || input == 'C') {
-        Serial.println("Entering new credentials...");
-        promptForCredentials();
-        connectWiFi();
+//----------------------------------------------------------------------------//
+// Pure Functions
+//----------------------------------------------------------------------------//
+
+Action parseUserInput(char input, AppMode currentMode) {
+  switch (input) {
+    case 'r':
+    case 'R':
+      return (currentMode == MODE_DISCONNECTED) ? Action::retryConnection() : Action::none();
+    case 'c':
+    case 'C':
+      return Action::requestCredentials();
+    default:
+      return Action::none();
+  }
+}
+
+//----------------------------------------------------------------------------//
+// Pure Reducers (State Transitions)
+//----------------------------------------------------------------------------//
+
+AppState reduce(const AppState& state, const Action& action) {
+  AppState newState = state;
+  newState.lastUpdate = millis();
+  
+  switch (action.type) {
+    case ACTION_NONE:
+      return newState;
+      
+    case ACTION_REQUEST_CREDENTIALS:
+      newState.mode = MODE_ENTERING_CREDENTIALS;
+      return newState;
+      
+    case ACTION_CREDENTIALS_ENTERED:
+      newState.credentials = action.newCredentials;
+      newState.credentialsChanged = true;
+      newState.shouldReconnect = true;
+      newState.mode = MODE_CONNECTING;
+      return newState;
+      
+    case ACTION_CONNECTION_STARTED:
+      newState.shouldReconnect = false;
+      return newState;
+      
+    case ACTION_RETRY_CONNECTION:
+      newState.shouldReconnect = true;
+      newState.mode = MODE_CONNECTING;
+      return newState;
+      
+    case ACTION_WIFI_CONNECTED:
+      newState.mode = MODE_CONNECTED;
+      newState.wifiStatus = action.wifiStatus;
+      newState.shouldReconnect = false;
+      return newState;
+      
+    case ACTION_WIFI_DISCONNECTED:
+      newState.mode = MODE_DISCONNECTED;
+      newState.wifiStatus = action.wifiStatus;
+      return newState;
+      
+    case ACTION_TICK: {
+      // Check if WiFi status changed
+      int currentWifiStatus = WiFi.status();
+      if (currentWifiStatus != newState.wifiStatus) {
+        newState.wifiStatus = currentWifiStatus;
+        if (currentWifiStatus == WL_CONNECTED && newState.mode != MODE_CONNECTED) {
+          newState.mode = MODE_CONNECTED;
+        } else if (currentWifiStatus != WL_CONNECTED && newState.mode == MODE_CONNECTED) {
+          newState.mode = MODE_DISCONNECTED;
+        }
       }
-      // Clear any remaining input
-      while (Serial.available()) Serial.read();
+      return newState;
+    }
+      
+    default:
+      return newState;
+  }
+}
+
+//----------------------------------------------------------------------------//
+// Pure Helper Functions
+//----------------------------------------------------------------------------//
+
+char readSingleChar() {
+  if (!Serial.available()) return '\0';
+  char input = Serial.read();
+  flushSerialInput();
+  return input;
+}
+
+bool isValidCredentialLength(const String& credential) {
+  return credential.length() > 0 && credential.length() < 64;
+}
+
+//----------------------------------------------------------------------------//
+// Side Effects System
+//----------------------------------------------------------------------------//
+
+Action performSideEffects(const AppState& oldState, const AppState& newState) {
+  // Handle LED updates
+  if (newState.mode != oldState.mode) {
+    updateLEDs(newState);
+  }
+  
+  // Handle credential persistence
+  if (newState.credentialsChanged && !oldState.credentialsChanged) {
+    saveCredentials(&newState.credentials);
+  }
+  
+  // Handle WiFi connection
+  if (newState.shouldReconnect && !oldState.shouldReconnect) {
+    Serial.println("Initiating WiFi connection...");
+    connectWiFi(&newState.credentials);
+    // Return action to reset shouldReconnect
+    return Action::connectionStarted();
+  }
+  
+  // Handle UI updates
+  if (newState.mode != oldState.mode) {
+    renderUI(newState);
+  }
+  
+  return Action::none();
+}
+
+void updateLEDs(const AppState& state) {
+  switch (state.mode) {
+    case MODE_CONNECTED:
+      digitalWrite(wifi_led_pin, HIGH);
+      break;
+    case MODE_CONNECTING:
+      // Blink during connection
+      digitalWrite(wifi_led_pin, (millis() / 250) % 2);
+      break;
+    default:
+      digitalWrite(wifi_led_pin, LOW);
+      break;
+  }
+}
+
+void renderUI(const AppState& state) {
+  switch (state.mode) {
+    case MODE_CONNECTED:
+      printCurrentNet();
+      Serial.println("Send 'c' to change credentials.");
+      break;
+    case MODE_DISCONNECTED:
+      Serial.println("Not connected. Send 'r' to retry or 'c' to change credentials.");
+      break;
+    case MODE_CONNECTING:
+      Serial.println("Connecting...");
+      break;
+    case MODE_ENTERING_CREDENTIALS:
+      // This will be handled by promptForCredentials
+      break;
+    case MODE_INITIALIZING:
+      Serial.println("Initializing...");
+      break;
+  }
+}
+
+//----------------------------------------------------------------------------//
+// Event Dispatch System
+//----------------------------------------------------------------------------//
+
+Action readEvents(const AppState& state) {
+  // Check for user input
+  char input = readSingleChar();
+  if (input != '\0') {
+    return parseUserInput(input, state.mode);
+  }
+  
+  // Always return a tick action to update state
+  return Action::tick();
+}
+
+//----------------------------------------------------------------------------//
+// State Observers (Reactive UI Updates)
+//----------------------------------------------------------------------------//
+
+typedef void (*StateObserver)(const AppState& oldState, const AppState& newState);
+
+void observeConnectedState(const AppState& oldState, const AppState& newState) {
+  if (oldState.mode != MODE_CONNECTED && newState.mode == MODE_CONNECTED) {
+    Serial.println("✓ Successfully connected to WiFi!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+  }
+}
+
+void observeDisconnectedState(const AppState& oldState, const AppState& newState) {
+  if (oldState.mode == MODE_CONNECTED && newState.mode == MODE_DISCONNECTED) {
+    Serial.println("✗ WiFi connection lost");
+  }
+}
+
+void observeCredentialChanges(const AppState& oldState, const AppState& newState) {
+  if (!oldState.credentialsChanged && newState.credentialsChanged) {
+    Serial.println("💾 Credentials saved successfully");
+  }
+}
+
+// Array of observers - easily extensible
+StateObserver g_observers[] = {
+  observeConnectedState,
+  observeDisconnectedState,
+  observeCredentialChanges
+};
+
+const int g_observerCount = sizeof(g_observers) / sizeof(g_observers[0]);
+
+void notifyObservers(const AppState& oldState, const AppState& newState) {
+  for (int i = 0; i < g_observerCount; i++) {
+    g_observers[i](oldState, newState);
+  }
+}
+
+//----------------------------------------------------------------------------//
+// Central Dispatch Function
+//----------------------------------------------------------------------------//
+
+void dispatch(Action action) {
+  AppState oldState = g_currentState;
+  g_currentState = reduce(g_currentState, action);
+  
+  // Execute side effects and get any follow-up action
+  Action followUpAction = performSideEffects(oldState, g_currentState);
+  
+  // Notify reactive observers
+  notifyObservers(oldState, g_currentState);
+  
+  // Dispatch follow-up action if needed
+  if (followUpAction.type != ACTION_NONE) {
+    // Recursive dispatch for follow-up actions
+    AppState prevState = g_currentState;
+    g_currentState = reduce(g_currentState, followUpAction);
+    notifyObservers(prevState, g_currentState);
+  }
+}
+
+//----------------------------------------------------------------------------//
+// Main Event Loop
+//----------------------------------------------------------------------------//
+
+void loop() {
+  Serial.print("DEBUG: Loop iteration, mode=");
+  Serial.print(g_currentState.mode);
+  Serial.print(", shouldReconnect=");
+  Serial.println(g_currentState.shouldReconnect);
+  
+  Action action = readEvents(g_currentState);
+  Serial.print("DEBUG: Action type=");
+  Serial.println(action.type);
+  
+  // Handle credential entry as a special case (blocking operation)
+  if (action.type == ACTION_REQUEST_CREDENTIALS) {
+    dispatch(action); // Change to credential entry mode
+    
+    Credentials newCreds;
+    if (promptForCredentialsBlocking(&newCreds)) {
+      Serial.println("DEBUG: About to dispatch credentialsEntered");
+      dispatch(Action::credentialsEntered(newCreds));
+      Serial.println("DEBUG: After dispatch credentialsEntered");
+      // Continue processing - don't return, let the loop continue
+    } else {
+      // If credential entry failed, go back to previous state
+      dispatch(Action::tick()); // This will update the mode based on current WiFi status
     }
   } else {
-    Serial.println("Not connected. Send 'r' to retry or 'c' to change credentials.");
-    if (Serial.available()) {
-      char input = Serial.read();
-      if (input == 'r' || input == 'R') {
-        Serial.println("Retrying connection...");
-        connectWiFi();
-      } else if (input == 'c' || input == 'C') {
-        Serial.println("Entering new credentials...");
-        promptForCredentials();
-        connectWiFi();
-      }
-      // Clear any remaining input
-      while (Serial.available()) Serial.read();
-    }
+    dispatch(action);
   }
-  delay(500);
+  
+  delay(100); // Reduced delay for more responsive UI
 }
 
 void printCurrentNet() {
