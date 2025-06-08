@@ -1,4 +1,7 @@
-# Arduino Giga R1 Demo App
+# Arduino Giga R1 FRP Wifi Management Demo App
+Note: At this point this is 90% written by Claude as an experiment and
+intentionally includes an absurd amout of LLM generated documention as I have
+almost zero C++ experience.
 
 Set an SSID and password via the serial connection then connect to the wifi
 network. When connected an LED on Digital Pin 3 is activated. The SSID and
