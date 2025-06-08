@@ -3,6 +3,34 @@
 #include <mbed_error.h>
 
 //----------------------------------------------------------------------------//
+// Debug Configuration
+//----------------------------------------------------------------------------//
+
+// Set to 1 to enable debug output, 0 to disable
+#define DEBUG_ENABLED 1
+
+#if DEBUG_ENABLED
+  #define DEBUG_PRINT(x) Serial.print(x)
+  #define DEBUG_PRINTLN(x) Serial.println(x)
+#else
+  #define DEBUG_PRINT(x)
+  #define DEBUG_PRINTLN(x)
+#endif
+
+#if DEBUG_ENABLED
+const char* getModeString(AppMode mode) {
+  switch (mode) {
+    case MODE_INITIALIZING: return "INITIALIZING";
+    case MODE_CONNECTING: return "CONNECTING";
+    case MODE_CONNECTED: return "CONNECTED";
+    case MODE_DISCONNECTED: return "DISCONNECTED";
+    case MODE_ENTERING_CREDENTIALS: return "ENTERING_CREDENTIALS";
+    default: return "UNKNOWN";
+  }
+}
+#endif
+
+//----------------------------------------------------------------------------//
 // Constants
 //----------------------------------------------------------------------------//
 
@@ -598,14 +626,16 @@ void dispatch(Action action) {
 //----------------------------------------------------------------------------//
 
 void loop() {
-  Serial.print("DEBUG: Loop iteration, mode=");
-  Serial.print(g_currentState.mode);
-  Serial.print(", shouldReconnect=");
-  Serial.println(g_currentState.shouldReconnect);
+  DEBUG_PRINT("DEBUG: Loop iteration, mode=");
+  DEBUG_PRINT(g_currentState.mode);
+  DEBUG_PRINT(" (");
+  DEBUG_PRINT(getModeString(g_currentState.mode));
+  DEBUG_PRINT("), shouldReconnect=");
+  DEBUG_PRINTLN(g_currentState.shouldReconnect);
   
   Action action = readEvents(g_currentState);
-  Serial.print("DEBUG: Action type=");
-  Serial.println(action.type);
+  DEBUG_PRINT("DEBUG: Action type=");
+  DEBUG_PRINTLN(action.type);
   
   // Handle credential entry as a special case (blocking operation)
   if (action.type == ACTION_REQUEST_CREDENTIALS) {
@@ -613,9 +643,9 @@ void loop() {
     
     Credentials newCreds;
     if (promptForCredentialsBlocking(&newCreds)) {
-      Serial.println("DEBUG: About to dispatch credentialsEntered");
+      DEBUG_PRINTLN("DEBUG: About to dispatch credentialsEntered");
       dispatch(Action::credentialsEntered(newCreds));
-      Serial.println("DEBUG: After dispatch credentialsEntered");
+      DEBUG_PRINTLN("DEBUG: After dispatch credentialsEntered");
       // Continue processing - don't return, let the loop continue
     } else {
       // If credential entry failed, go back to previous state
