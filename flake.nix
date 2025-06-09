@@ -43,6 +43,10 @@
             ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga --libraries . examples/WiFiManager
           '';
 
+          build2 = pkgs.writeShellScriptBin "build" ''
+            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga --libraries . examples/SimpleLED
+          '';
+
           load = pkgs.writeShellScriptBin "load" ''
             ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga --libraries . examples/WiFiManager
             ${arduino-cli}/bin/arduino-cli upload --port /dev/ttyACM0 --fqbn arduino:mbed_giga:giga examples/WiFiManager
@@ -66,6 +70,7 @@
 
         apps = {
           build = flake-utils.lib.mkApp { drv = self.packages.${system}.build; };
+          build2 = flake-utils.lib.mkApp { drv = self.packages.${system}.build2; };
           load = flake-utils.lib.mkApp { drv = self.packages.${system}.load; };
           monitor = flake-utils.lib.mkApp { drv = self.packages.${system}.monitor; };
         };

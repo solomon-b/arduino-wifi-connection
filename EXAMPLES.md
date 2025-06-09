@@ -1,6 +1,6 @@
 # Moore Machine Examples for Arduino
 
-Practical Moore machine patterns for common Arduino projects. Each example demonstrates proper separation of state space Q, input alphabet Σ, transition function δ, and output function λ.
+Practical Moore machine patterns for common Arduino projects. Each example demonstrates proper separation of state space Q, input alphabet Σ, effect alphabet Γ, transition function δ, and output function λ.
 
 ## Example 1: Smart LED Controller
 
@@ -161,55 +161,98 @@ LEDState transitionFunction(const LEDState& state, const Input& input) {
 }
 ```
 
-### Output Function λ: Q → Γ
+### Effect Alphabet Γ
 
-Handle all I/O based on current state (Moore property):
+Define all possible effects the system can produce:
 
 ```cpp
-Input outputFunction(const LEDState& oldState, const LEDState& newState) {
+enum EffectType {
+  EFFECT_NONE,
+  EFFECT_SET_LED_PWM,
+  EFFECT_LOG_MODE_CHANGE,
+  EFFECT_COUNT
+};
+
+struct Effect {
+  EffectType type;
+  int ledPin;
+  int pwmValue;
+  ControlMode mode;
+  
+  static Effect none() { Effect e; e.type = EFFECT_NONE; return e; }
+  static Effect setLEDPWM(int pin, int value) {
+    Effect e; e.type = EFFECT_SET_LED_PWM; e.ledPin = pin; e.pwmValue = value; return e;
+  }
+  static Effect logModeChange(ControlMode m) {
+    Effect e; e.type = EFFECT_LOG_MODE_CHANGE; e.mode = m; return e;
+  }
+};
+```
+
+### Output Function λ: Q → Γ
+
+Generate effects based on current state (Moore property):
+
+```cpp
+Effect outputFunction(const LEDState& state) {
   const int LED_PIN = 9;  // PWM pin
   
   // Calculate LED output based on current state
   int ledValue = 0;
-  unsigned long elapsed = millis() - newState.patternStart;
+  unsigned long elapsed = millis() - state.patternStart;
   
-  switch (newState.pattern) {
+  switch (state.pattern) {
     case LED_OFF:
       ledValue = 0;
       break;
       
     case LED_SOLID:
-      ledValue = newState.brightness;
+      ledValue = state.brightness;
       break;
       
     case LED_BLINK_SLOW:
-      ledValue = (elapsed / 1000) % 2 ? newState.brightness : 0;
+      ledValue = (elapsed / 1000) % 2 ? state.brightness : 0;
       break;
       
     case LED_BLINK_FAST:
-      ledValue = (elapsed / 200) % 2 ? newState.brightness : 0;
+      ledValue = (elapsed / 200) % 2 ? state.brightness : 0;
       break;
       
     case LED_FADE:
       // Sine wave fade
       float phase = (elapsed % 3000) / 3000.0 * 2 * PI;
-      ledValue = (sin(phase) + 1) * newState.brightness / 2;
+      ledValue = (sin(phase) + 1) * state.brightness / 2;
       break;
   }
   
-  analogWrite(LED_PIN, ledValue);
-  
-  // Status output when mode changes
-  if (oldState.mode != newState.mode) {
-    Serial.print("Control mode: ");
-    switch (newState.mode) {
-      case CONTROL_MANUAL: Serial.println("MANUAL"); break;
-      case CONTROL_WIFI: Serial.println("WIFI"); break;
-      case CONTROL_AUTO: Serial.println("AUTO"); break;
-    }
+  return Effect::setLEDPWM(LED_PIN, ledValue);
+}
+```
+
+### Execute Effects
+
+Handle all I/O operations separately:
+
+```cpp
+void executeEffect(const Effect& effect) {
+  switch (effect.type) {
+    case EFFECT_SET_LED_PWM:
+      analogWrite(effect.ledPin, effect.pwmValue);
+      break;
+      
+    case EFFECT_LOG_MODE_CHANGE:
+      Serial.print("Control mode: ");
+      switch (effect.mode) {
+        case CONTROL_MANUAL: Serial.println("MANUAL"); break;
+        case CONTROL_WIFI: Serial.println("WIFI"); break;
+        case CONTROL_AUTO: Serial.println("AUTO"); break;
+      }
+      break;
+      
+    case EFFECT_NONE:
+    default:
+      break;
   }
-  
-  return Input::none();
 }
 ```
 
@@ -219,10 +262,11 @@ Input outputFunction(const LEDState& oldState, const LEDState& newState) {
 #include <MooreArduino.h>
 using namespace MooreArduino;
 
-MooreMachine<LEDState, Input> ledMachine(transitionFunction, LEDState());
+MooreMachine<LEDState, Input, Effect> ledMachine(transitionFunction, LEDState());
 Timer sensorTimer(500);  // Read sensor every 500ms
 Button modeButton(2);
 Button patternButton(3);
+ControlMode lastMode = CONTROL_MANUAL;
 
 void setup() {
   Serial.begin(115200);
@@ -234,6 +278,20 @@ void setup() {
 }
 
 void loop() {
+  // 1. Get current effect from Moore machine λ: Q → Γ
+  Effect effect = ledMachine.getCurrentOutput();
+  
+  // 2. Execute effect (handle I/O)
+  executeEffect(effect);
+  
+  // 3. Check for mode changes and log them
+  const LEDState& state = ledMachine.getState();
+  if (state.mode != lastMode) {
+    executeEffect(Effect::logModeChange(state.mode));
+    lastMode = state.mode;
+  }
+  
+  // 4. Process inputs
   Input input = Input::none();
   
   if (modeButton.wasPressed()) {
@@ -382,62 +440,91 @@ TempState tempTransition(const TempState& state, const TempInput& input) {
 }
 ```
 
-### Output Function λ
+### Effect Alphabet Γ
 
 ```cpp
-TempInput tempOutputFunction(const TempState& oldState, const TempState& newState) {
-  const int ALARM_LED = 4;
-  const int STATUS_LED = 5;
+enum TempEffectType {
+  TEMP_EFFECT_NONE,
+  TEMP_EFFECT_SET_LEDS,
+  TEMP_EFFECT_LOG_MODE,
+  TEMP_EFFECT_LOG_ALARM,
+  TEMP_EFFECT_LOG_TEMP
+};
+
+struct TempEffect {
+  TempEffectType type;
+  MonitorMode mode;
+  bool statusLED;
+  bool alarmLED;
+  float temperature;
+  int sampleCount;
   
+  static TempEffect setLEDs(bool status, bool alarm) {
+    TempEffect e; e.type = TEMP_EFFECT_SET_LEDS; 
+    e.statusLED = status; e.alarmLED = alarm; return e;
+  }
+};
+```
+
+### Output Function λ: Q → Γ
+
+```cpp
+TempEffect tempOutputFunction(const TempState& state) {
   // Moore property: outputs depend only on current state
-  switch (newState.mode) {
+  switch (state.mode) {
     case MONITOR_IDLE:
-      digitalWrite(STATUS_LED, LOW);
-      digitalWrite(ALARM_LED, LOW);
-      break;
+      return TempEffect::setLEDs(false, false);
       
     case MONITOR_SAMPLING:
-      digitalWrite(STATUS_LED, HIGH);
-      digitalWrite(ALARM_LED, LOW);
-      break;
+      return TempEffect::setLEDs(true, false);
       
     case MONITOR_ALARM_HIGH:
     case MONITOR_ALARM_LOW:
-      digitalWrite(STATUS_LED, HIGH);
-      digitalWrite(ALARM_LED, (millis() / 250) % 2);  // Blink alarm
-      break;
+      return TempEffect::setLEDs(true, (millis() / 250) % 2);
       
     case MONITOR_CALIBRATING:
-      digitalWrite(STATUS_LED, (millis() / 100) % 2);  // Fast blink
-      digitalWrite(ALARM_LED, LOW);
+      return TempEffect::setLEDs((millis() / 100) % 2, false);
+  }
+  
+  return TempEffect::none();
+}
+```
+
+### Execute Effects
+
+```cpp
+void executeTempEffect(const TempEffect& effect) {
+  const int ALARM_LED = 4;
+  const int STATUS_LED = 5;
+  
+  switch (effect.type) {
+    case TEMP_EFFECT_SET_LEDS:
+      digitalWrite(STATUS_LED, effect.statusLED);
+      digitalWrite(ALARM_LED, effect.alarmLED);
+      break;
+      
+    case TEMP_EFFECT_LOG_MODE:
+      Serial.print("Monitor mode: ");
+      Serial.println(effect.mode);
+      break;
+      
+    case TEMP_EFFECT_LOG_ALARM:
+      if (effect.mode == MONITOR_ALARM_HIGH) {
+        Serial.print("HIGH TEMP ALARM: ");
+      } else {
+        Serial.print("LOW TEMP ALARM: ");
+      }
+      Serial.println(effect.temperature);
+      break;
+      
+    case TEMP_EFFECT_LOG_TEMP:
+      Serial.print("Temp: ");
+      Serial.print(effect.temperature);
+      Serial.print("°C (Sample #");
+      Serial.print(effect.sampleCount);
+      Serial.println(")");
       break;
   }
-  
-  // State entry actions
-  if (oldState.mode != newState.mode) {
-    Serial.print("Monitor mode: ");
-    Serial.println(newState.mode);
-    
-    if (newState.mode == MONITOR_ALARM_HIGH) {
-      Serial.print("HIGH TEMP ALARM: ");
-      Serial.println(newState.currentTemp);
-    } else if (newState.mode == MONITOR_ALARM_LOW) {
-      Serial.print("LOW TEMP ALARM: ");
-      Serial.println(newState.currentTemp);
-    }
-  }
-  
-  // Log temperature readings
-  if (newState.mode == MONITOR_SAMPLING && 
-      newState.sampleCount != oldState.sampleCount) {
-    Serial.print("Temp: ");
-    Serial.print(newState.currentTemp);
-    Serial.print("°C (Sample #");
-    Serial.print(newState.sampleCount);
-    Serial.println(")");
-  }
-  
-  return TempInput::none();
 }
 ```
 

@@ -496,10 +496,11 @@ Moore machines might be overkill for:
 Moore machines have useful mathematical properties:
 
 - **Deterministic**: δ(q, σ) always produces the same result
-- **Finite**: Only finitely many states and inputs
+- **Finite**: Only finitely many states, inputs, and effects
 - **Memoryless**: Only current state matters, not history
 - **Composable**: Multiple machines can be combined
 - **Analyzable**: Can prove properties about behavior
+- **Predictable**: λ(q) always produces the same effect for a given state
 
 This mathematical foundation makes your Arduino code more reliable and easier to reason about than traditional imperative programming approaches.
 

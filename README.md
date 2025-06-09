@@ -9,7 +9,8 @@ A Moore machine is a finite automaton where outputs depend only on the current s
 - **Q** is a finite set of states
 - **Σ** is a finite set of input symbols  
 - **δ: Q × Σ → Q** is the state transition function
-- **λ: Q → Γ** is the output function
+- **λ: Q → Γ** is the output function that generates effects
+- **Γ** is a finite set of output symbols (effects)
 - **q₀** is the initial state
 
 *Note: If you're familiar with Redux, a Redux store is precisely a Moore machine where actions are input symbols (Σ), reducers are transition functions (δ), and side effects are output functions (λ).*
@@ -28,9 +29,10 @@ Moore machines provide several advantages over traditional Arduino programming:
 ## Library Components
 
 ### Core State Machine
-- **MooreMachine<State, Input>**: Template-based finite state machine
+- **MooreMachine<State, Input, Effect>**: Template-based finite state machine
 - **Pure transition functions**: δ(q, σ) → q' with no side effects
-- **Output functions**: λ(q) → outputs with I/O isolation
+- **Output functions**: λ(q) → effects with I/O isolation
+- **Effect execution**: All I/O operations handled separately
 - **State observers**: Reactive patterns for UI updates
 
 ### Utility Classes
@@ -64,6 +66,17 @@ struct Input {
   static Input tick() { Input i; i.type = INPUT_TICK; return i; }
 };
 
+// Define your effect alphabet Γ
+enum EffectType { EFFECT_NONE, EFFECT_LED_ON, EFFECT_LED_OFF };
+
+struct Effect {
+  EffectType type;
+  
+  static Effect none() { Effect e; e.type = EFFECT_NONE; return e; }
+  static Effect ledOn() { Effect e; e.type = EFFECT_LED_ON; return e; }
+  static Effect ledOff() { Effect e; e.type = EFFECT_LED_OFF; return e; }
+};
+
 // Pure transition function δ: Q × Σ → Q
 AppState transitionFunction(const AppState& state, const Input& input) {
   AppState newState = state;
@@ -89,23 +102,37 @@ AppState transitionFunction(const AppState& state, const Input& input) {
   return newState;
 }
 
-// Output function λ: Q → Γ (handles I/O)
-Input outputFunction(const AppState& oldState, const AppState& newState) {
+// Output function λ: Q → Γ (generates effects)
+Effect outputFunction(const AppState& state) {
   // Moore property: outputs depend only on current state
-  switch (newState.mode) {
+  switch (state.mode) {
     case IDLE:
-      digitalWrite(LED_PIN, LOW);
-      break;
+      return Effect::ledOff();
     case WORKING:
+      return Effect::ledOn();
+    case ERROR:
+      return Effect::none();
+  }
+  return Effect::none();
+}
+
+// Execute effects (handle I/O)
+void executeEffect(const Effect& effect) {
+  switch (effect.type) {
+    case EFFECT_LED_ON:
       digitalWrite(LED_PIN, HIGH);
       break;
+    case EFFECT_LED_OFF:
+      digitalWrite(LED_PIN, LOW);
+      break;
+    case EFFECT_NONE:
+    default:
+      break;
   }
-  
-  return Input::none();
 }
 
 // Create and use Moore machine
-MooreMachine<AppState, Input> machine(transitionFunction, AppState());
+MooreMachine<AppState, Input, Effect> machine(transitionFunction, AppState());
 
 void setup() {
   machine.setOutputFunction(outputFunction);
@@ -113,6 +140,13 @@ void setup() {
 }
 
 void loop() {
+  // 1. Get current effect from Moore machine λ: Q → Γ
+  Effect effect = machine.getCurrentOutput();
+  
+  // 2. Execute effect (handle I/O)
+  executeEffect(effect);
+  
+  // 3. Process inputs
   Input input = readEnvironment();  // Your input logic here
   if (input.type != INPUT_NONE) {
     machine.step(input);
@@ -193,7 +227,7 @@ SUBSYSTEMS=="usb", ATTRS{idVendor}=="0525", MODE:="0666"
 
 ## API Reference
 
-### MooreMachine<State, Input>
+### MooreMachine<State, Input, Effect>
 
 ```cpp
 // Constructor
@@ -204,6 +238,9 @@ void step(const Input& input)
 
 // Get current state (read-only)
 const State& getState() const
+
+// Get current effect from output function λ: Q → Γ
+Effect getCurrentOutput() const
 
 // Set output function λ
 void setOutputFunction(OutputFunction λ)
@@ -236,7 +273,7 @@ This library implements Moore machines directly rather than hiding them behind f
 
 1. **Mathematical Foundation**: Based on formal automata theory
 2. **Pure Functions**: Transition functions have no side effects
-3. **I/O Isolation**: All I/O happens in output functions  
+3. **I/O Isolation**: All I/O happens in effect execution functions  
 4. **Type Safety**: Template-based for compile-time correctness
 5. **Embedded-Friendly**: Minimal memory usage, no dynamic allocation
 

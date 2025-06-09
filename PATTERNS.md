@@ -7,15 +7,16 @@ Advanced patterns and quick reference for experienced Moore machine developers.
 ### Do This
 - Define finite state spaces with enums + validation
 - Keep transition functions pure (no I/O, no side effects)
-- Handle all I/O in output functions
+- Generate effects in output functions, execute them separately
 - Use meaningful names and document state diagrams
 - Validate state invariants with assertions
 
 ### Don't Do This  
 - Put I/O operations in transition functions
+- Put I/O operations in output functions (generate effects instead)
 - Use unbounded state spaces (counters without limits)
 - Make non-deterministic transitions
-- Mix business logic with I/O handling
+- Mix business logic with effect execution
 
 ## Advanced Patterns
 
@@ -282,6 +283,29 @@ AppState goodTransition(const AppState& state, const Input& input) {
     newState.mode = MODE_WORKING;     // Only state changes
   }
   return newState;
+}
+
+// Good - pure output function
+Effect outputFunction(const AppState& state) {
+  switch (state.mode) {
+    case MODE_IDLE:
+      return Effect::ledOff();
+    case MODE_WORKING:
+      return Effect::ledOn();
+  }
+  return Effect::none();
+}
+
+// Good - effect execution (separate from Moore machine)
+void executeEffect(const Effect& effect) {
+  switch (effect.type) {
+    case EFFECT_LED_ON:
+      digitalWrite(LED_PIN, HIGH);
+      break;
+    case EFFECT_LED_OFF:
+      digitalWrite(LED_PIN, LOW);
+      break;
+  }
 }
 ```
 

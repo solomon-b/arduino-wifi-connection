@@ -1,7 +1,7 @@
 /*
  * Simple LED Controller using MooreArduino Library
  * 
- * This example demonstrates basic Moore machine patterns with the MooreArduino library.
+ * This example demonstrates pure Moore machine patterns with the MooreArduino library.
  * Controls an LED with a button using predictable state management.
  * 
  * Hardware:
@@ -16,8 +16,9 @@
  * Moore Machine Definition:
  * - Q (states): {LED_OFF, LED_ON, LED_BLINKING_SLOW, LED_BLINKING_FAST}
  * - Σ (inputs): {INPUT_NONE, INPUT_BUTTON_PRESSED, INPUT_TICK}
+ * - Γ (effects): {EFFECT_NONE, EFFECT_LED_OFF, EFFECT_LED_ON, EFFECT_LED_BLINK_SLOW, EFFECT_LED_BLINK_FAST, EFFECT_LOG_STATE_CHANGE}
  * - δ (transition): Button press cycles modes, tick advances blink timing
- * - λ (output): LED control and serial logging based on current state
+ * - λ (output): Pure function generating effects based on current state
  */
 
 #include <MooreArduino.h>
@@ -25,7 +26,7 @@
 using namespace MooreArduino;
 
 //----------------------------------------------------------------------------//
-// State Space Q & Input Alphabet Σ
+// State Space Q, Input Alphabet Σ, and Effect Alphabet Γ
 //----------------------------------------------------------------------------//
 
 enum LEDMode {
@@ -39,6 +40,15 @@ enum InputType {
   INPUT_NONE,
   INPUT_BUTTON_PRESSED,
   INPUT_TICK
+};
+
+enum EffectType {
+  EFFECT_NONE,
+  EFFECT_LED_OFF,
+  EFFECT_LED_ON,
+  EFFECT_LED_BLINK_SLOW,
+  EFFECT_LED_BLINK_FAST,
+  EFFECT_LOG_STATE_CHANGE
 };
 
 struct AppState {
@@ -70,6 +80,53 @@ struct Input {
     Input i;
     i.type = INPUT_NONE;
     return i;
+  }
+};
+
+struct Effect {
+  EffectType type;
+  LEDMode newMode;  // For state change logging
+  int blinkState;   // For blink effects
+  
+  Effect() : type(EFFECT_NONE), newMode(LED_OFF), blinkState(0) {}
+  
+  static Effect none() {
+    Effect e;
+    e.type = EFFECT_NONE;
+    return e;
+  }
+  
+  static Effect ledOff() {
+    Effect e;
+    e.type = EFFECT_LED_OFF;
+    return e;
+  }
+  
+  static Effect ledOn() {
+    Effect e;
+    e.type = EFFECT_LED_ON;
+    return e;
+  }
+  
+  static Effect ledBlinkSlow(int counter) {
+    Effect e;
+    e.type = EFFECT_LED_BLINK_SLOW;
+    e.blinkState = (counter / 5) % 2;  // Blink every 50 ticks (500ms at 10Hz)
+    return e;
+  }
+  
+  static Effect ledBlinkFast(int counter) {
+    Effect e;
+    e.type = EFFECT_LED_BLINK_FAST;
+    e.blinkState = counter % 2;  // Blink every 10 ticks (100ms at 10Hz)
+    return e;
+  }
+  
+  static Effect logStateChange(LEDMode mode) {
+    Effect e;
+    e.type = EFFECT_LOG_STATE_CHANGE;
+    e.newMode = mode;
+    return e;
   }
 };
 
@@ -121,43 +178,62 @@ AppState transitionFunction(const AppState& state, const Input& input) {
 }
 
 //----------------------------------------------------------------------------//
-// Output Function λ: Q → Γ
+// Pure Output Function λ: Q → Γ
 //----------------------------------------------------------------------------//
 
-Input outputFunction(const AppState& oldState, const AppState& newState) {
-  // Moore property: LED output depends only on current state
-  switch (newState.mode) {
+Effect outputFunction(const AppState& state) {
+  // Moore property: effects depend only on current state
+  switch (state.mode) {
     case LED_OFF:
+      return Effect::ledOff();
+      
+    case LED_ON:
+      return Effect::ledOn();
+      
+    case LED_BLINKING_SLOW:
+      return Effect::ledBlinkSlow(state.blinkCounter);
+      
+    case LED_BLINKING_FAST:
+      return Effect::ledBlinkFast(state.blinkCounter);
+  }
+  
+  return Effect::none();
+}
+
+//----------------------------------------------------------------------------//
+// Effect Execution (I/O happens here)
+//----------------------------------------------------------------------------//
+
+void executeEffect(const Effect& effect) {
+  switch (effect.type) {
+    case EFFECT_LED_OFF:
       digitalWrite(LED_PIN, LOW);
       break;
       
-    case LED_ON:
+    case EFFECT_LED_ON:
       digitalWrite(LED_PIN, HIGH);
       break;
       
-    case LED_BLINKING_SLOW:
-      // Blink every 50 ticks (500ms at 10Hz)
-      digitalWrite(LED_PIN, (newState.blinkCounter / 5) % 2);
+    case EFFECT_LED_BLINK_SLOW:
+    case EFFECT_LED_BLINK_FAST:
+      digitalWrite(LED_PIN, effect.blinkState);
       break;
       
-    case LED_BLINKING_FAST:
-      // Blink every 10 ticks (100ms at 10Hz)
-      digitalWrite(LED_PIN, newState.blinkCounter % 2);
+    case EFFECT_LOG_STATE_CHANGE:
+      Serial.print("LED mode changed to: ");
+      switch (effect.newMode) {
+        case LED_OFF: Serial.println("OFF"); break;
+        case LED_ON: Serial.println("ON"); break;
+        case LED_BLINKING_SLOW: Serial.println("BLINKING_SLOW"); break;
+        case LED_BLINKING_FAST: Serial.println("BLINKING_FAST"); break;
+      }
+      break;
+      
+    case EFFECT_NONE:
+    default:
+      // No effect to execute
       break;
   }
-  
-  // Print state changes to serial
-  if (newState.mode != oldState.mode) {
-    Serial.print("LED mode changed to: ");
-    switch (newState.mode) {
-      case LED_OFF: Serial.println("OFF"); break;
-      case LED_ON: Serial.println("ON"); break;
-      case LED_BLINKING_SLOW: Serial.println("BLINKING_SLOW"); break;
-      case LED_BLINKING_FAST: Serial.println("BLINKING_FAST"); break;
-    }
-  }
-  
-  return Input::none();
 }
 
 //----------------------------------------------------------------------------//
@@ -170,6 +246,10 @@ void observeModeChanges(const AppState& oldState, const AppState& newState) {
     Serial.print(oldState.mode);
     Serial.print(" -> ");
     Serial.println(newState.mode);
+    
+    // Generate a logging effect (this is a bit awkward - could be improved)
+    Effect logEffect = Effect::logStateChange(newState.mode);
+    executeEffect(logEffect);
   }
 }
 
@@ -177,7 +257,7 @@ void observeModeChanges(const AppState& oldState, const AppState& newState) {
 // Global Objects
 //----------------------------------------------------------------------------//
 
-MooreMachine<AppState, Input> machine(transitionFunction, AppState());
+MooreMachine<AppState, Input, Effect> machine(transitionFunction, AppState());
 Timer tickTimer(100);        // 10Hz tick rate
 Button ledButton(BUTTON_PIN); // Button on pin 2
 
@@ -207,15 +287,25 @@ void setup() {
 }
 
 void loop() {
-  // Check for button press
+  // 1. Get current effect from Moore machine λ: Q → Γ
+  Effect effect = machine.getCurrentOutput();
+  
+  // 2. Execute effect in main loop (handle I/O)
+  executeEffect(effect);
+  
+  // 3. Gather inputs from environment
+  Input input = Input::none();
+  
   if (ledButton.wasPressed()) {
-    machine.step(Input::buttonPressed());
+    input = Input::buttonPressed();
+  } else if (tickTimer.expired()) {
+    tickTimer.restart();
+    input = Input::tick();
   }
   
-  // Send tick input at regular intervals
-  if (tickTimer.expired()) {
-    tickTimer.restart();
-    machine.step(Input::tick());
+  // 4. Step the machine with new input δ: Q × Σ → Q
+  if (input.type != INPUT_NONE) {
+    machine.step(input);
   }
   
   delay(10); // Small delay to prevent overwhelming the system

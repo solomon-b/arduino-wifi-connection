@@ -18,11 +18,13 @@ namespace MooreArduino {
  * Template parameters:
  *   State - Your state space Q (the set of all possible states)
  *   Input - Your input alphabet Σ (the set of all possible inputs)
+ *   Effect - Your output alphabet Γ (the set of all possible effects)
  * 
  * Usage:
- *   // Define your state space and input alphabet
- *   struct AppState { int mode; };  // Q
- *   struct Input { int type; };     // Σ
+ *   // Define your state space, input alphabet, and effect alphabet
+ *   struct AppState { int mode; };     // Q
+ *   struct Input { int type; };        // Σ
+ *   struct Effect { int type; };       // Γ
  *   
  *   // Define your transition function δ: Q × Σ → Q
  *   AppState transitionFunction(const AppState& state, const Input& input) {
@@ -31,19 +33,28 @@ namespace MooreArduino {
  *     return newState;
  *   }
  *   
- *   // Create Moore machine
- *   MooreMachine<AppState, Input> machine(transitionFunction, AppState());
+ *   // Define your output function λ: Q → Γ
+ *   Effect outputFunction(const AppState& state) {
+ *     // generate effects based on current state
+ *     return effect;
+ *   }
  *   
- *   // Process inputs
- *   machine.step(myInput);
- *   AppState currentState = machine.getState();
+ *   // Create Moore machine
+ *   MooreMachine<AppState, Input, Effect> machine(transitionFunction, AppState());
+ *   machine.setOutputFunction(outputFunction);
+ *   
+ *   // Main loop
+ *   Effect effect = machine.getCurrentOutput();
+ *   executeEffect(effect);  // Handle effects in main loop
+ *   Input input = readEnvironment();
+ *   machine.step(input);
  */
-template<typename State, typename Input>
+template<typename State, typename Input, typename Effect>
 class MooreMachine {
 public:
   // Function pointer types for Moore machine components
   typedef State (*TransitionFunction)(const State&, const Input&);  // δ: Q × Σ → Q
-  typedef Input (*OutputFunction)(const State&, const State&);      // λ: Q → Γ (generates follow-up inputs)
+  typedef Effect (*OutputFunction)(const State&);                   // λ: Q → Γ
   typedef void (*StateObserver)(const State&, const State&);        // Observer pattern for state changes
 
 private:
@@ -80,26 +91,10 @@ public:
     
     State oldState = currentState;
     
-    // 1. Apply input to current state via transition function δ
+    // Apply input to current state via transition function δ
     currentState = delta(currentState, input);
     
-    // 2. Execute output function λ if defined (generates follow-up inputs)
-    if (lambda) {
-      Input followUpInput = lambda(oldState, currentState);
-      
-      // Process follow-up inputs (but prevent infinite loops)
-      static int stepDepth = 0;
-      if (stepDepth < 3) {  // Prevent deep recursion
-        stepDepth++;
-        step(followUpInput);  // Recursively process follow-up input
-        stepDepth--;
-      } else {
-        // Prevent compiler warning by explicitly using the variable
-        (void)followUpInput;
-      }
-    }
-    
-    // 3. Notify all state observers
+    // Notify all state observers
     notifyObservers(oldState, currentState);
   }
 
@@ -111,8 +106,19 @@ public:
   }
 
   /**
-   * Set output function λ (optional)
-   * The output function can generate follow-up inputs based on state transitions
+   * Get current output from output function λ: Q → Γ
+   * Returns the effect that should be executed based on current state
+   */
+  Effect getCurrentOutput() const {
+    if (lambda) {
+      return lambda(currentState);
+    }
+    return Effect();  // Default-constructed effect if no output function
+  }
+
+  /**
+   * Set output function λ: Q → Γ
+   * The output function generates effects based on the current state
    */
   void setOutputFunction(OutputFunction outputFunc) {
     lambda = outputFunc;
