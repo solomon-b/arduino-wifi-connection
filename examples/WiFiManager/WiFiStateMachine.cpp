@@ -30,7 +30,7 @@ using namespace MooreArduino;
 // External References
 //----------------------------------------------------------------------------//
 
-extern MooreMachine<AppState, Input, Effect> g_machine;  // Defined in main file
+extern MooreMachine<AppState, Input, Output> g_machine;  // Defined in main file
 
 //----------------------------------------------------------------------------//
 // Pure State Transition Function δ: Q × Σ → Q
@@ -108,43 +108,43 @@ AppState transitionFunction(const AppState& state, const Input& input) {
 // Pure Output Function λ: Q → Γ
 //----------------------------------------------------------------------------//
 
-Effect outputFunction(const AppState& state) {
+Output outputFunction(const AppState& state) {
   // Priority 1: Handle shouldReconnect flag
   if (state.shouldReconnect) {
-    return Effect::startWiFiConnection();
+    return Output::startWiFiConnection();
   }
   
   // Priority 2: Handle credentials that need saving
   if (state.credentialsChanged) {
-    return Effect::saveCredentials();
+    return Output::saveCredentials();
   }
   
   // Priority 3: Generate LED effects based on current mode
   switch (state.mode) {
     case MODE_CONNECTED:
-      return Effect::updateLEDs(state.mode);
+      return Output::updateLEDs(state.mode);
       
     case MODE_CONNECTING:
-      return Effect::updateLEDs(state.mode);
+      return Output::updateLEDs(state.mode);
       
     case MODE_DISCONNECTED:
-      return Effect::updateLEDs(state.mode);
+      return Output::updateLEDs(state.mode);
       
     case MODE_ENTERING_CREDENTIALS:
-      return Effect::updateLEDs(state.mode);
+      return Output::updateLEDs(state.mode);
       
     case MODE_INITIALIZING:
-      return Effect::updateLEDs(state.mode);
+      return Output::updateLEDs(state.mode);
   }
   
-  return Effect::none();
+  return Output::none();
 }
 
 //----------------------------------------------------------------------------//
-// Effect Execution
+// Output Execution
 //----------------------------------------------------------------------------//
 
-Input executeEffect(const Effect& effect) {
+Input executeEffect(const Output& effect) {
   switch (effect.type) {
     case EFFECT_UPDATE_LEDS:
       updateLEDs(effect.currentMode);

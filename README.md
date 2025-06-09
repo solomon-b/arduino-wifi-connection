@@ -29,10 +29,10 @@ Moore machines provide several advantages over traditional Arduino programming:
 ## Library Components
 
 ### Core State Machine
-- **MooreMachine<State, Input, Effect>**: Template-based finite state machine
+- **MooreMachine<State, Input, Output>**: Template-based finite state machine
 - **Pure transition functions**: δ(q, σ) → q' with no side effects
 - **Output functions**: λ(q) → effects with I/O isolation
-- **Effect execution**: All I/O operations handled separately
+- **Output execution**: All I/O operations handled separately
 - **State observers**: Reactive patterns for UI updates
 
 ### Utility Classes
@@ -67,14 +67,14 @@ struct Input {
 };
 
 // Define your effect alphabet Γ
-enum EffectType { EFFECT_NONE, EFFECT_LED_ON, EFFECT_LED_OFF };
+enum OutputType { EFFECT_NONE, EFFECT_LED_ON, EFFECT_LED_OFF };
 
-struct Effect {
-  EffectType type;
+struct Output {
+  OutputType type;
   
-  static Effect none() { Effect e; e.type = EFFECT_NONE; return e; }
-  static Effect ledOn() { Effect e; e.type = EFFECT_LED_ON; return e; }
-  static Effect ledOff() { Effect e; e.type = EFFECT_LED_OFF; return e; }
+  static Output none() { Output e; e.type = EFFECT_NONE; return e; }
+  static Output ledOn() { Output e; e.type = EFFECT_LED_ON; return e; }
+  static Output ledOff() { Output e; e.type = EFFECT_LED_OFF; return e; }
 };
 
 // Pure transition function δ: Q × Σ → Q
@@ -103,21 +103,21 @@ AppState transitionFunction(const AppState& state, const Input& input) {
 }
 
 // Output function λ: Q → Γ (generates effects)
-Effect outputFunction(const AppState& state) {
+Output outputFunction(const AppState& state) {
   // Moore property: outputs depend only on current state
   switch (state.mode) {
     case IDLE:
-      return Effect::ledOff();
+      return Output::ledOff();
     case WORKING:
-      return Effect::ledOn();
+      return Output::ledOn();
     case ERROR:
-      return Effect::none();
+      return Output::none();
   }
-  return Effect::none();
+  return Output::none();
 }
 
 // Execute effects (handle I/O)
-void executeEffect(const Effect& effect) {
+void executeEffect(const Output& effect) {
   switch (effect.type) {
     case EFFECT_LED_ON:
       digitalWrite(LED_PIN, HIGH);
@@ -132,7 +132,7 @@ void executeEffect(const Effect& effect) {
 }
 
 // Create and use Moore machine
-MooreMachine<AppState, Input, Effect> machine(transitionFunction, AppState());
+MooreMachine<AppState, Input, Output> machine(transitionFunction, AppState());
 
 void setup() {
   machine.setOutputFunction(outputFunction);
@@ -141,10 +141,10 @@ void setup() {
 
 void loop() {
   // 1. Get current effect from Moore machine λ: Q → Γ
-  Effect effect = machine.getCurrentOutput();
+  Output output = machine.getCurrentOutput();
   
   // 2. Execute effect (handle I/O)
-  executeEffect(effect);
+  executeEffect(output);
   
   // 3. Process inputs
   Input input = readEnvironment();  // Your input logic here
@@ -170,11 +170,6 @@ Multi-mode LED controller with hierarchical state machines:
 - **Modes**: Manual, WiFi, Auto (light sensor)
 - **Patterns**: Solid, blink, fade with brightness control
 - **Demonstrates**: Mode switching, sensor integration
-
-### 3. Temperature Monitor (`examples/`)
-Environmental monitoring with alarms:
-- **Features**: Threshold monitoring, alarm states, data logging
-- **Patterns**: Error recovery, calibration modes
 
 ## Installation
 
@@ -227,7 +222,7 @@ SUBSYSTEMS=="usb", ATTRS{idVendor}=="0525", MODE:="0666"
 
 ## API Reference
 
-### MooreMachine<State, Input, Effect>
+### MooreMachine<State, Input, Output>
 
 ```cpp
 // Constructor
@@ -240,7 +235,7 @@ void step(const Input& input)
 const State& getState() const
 
 // Get current effect from output function λ: Q → Γ
-Effect getCurrentOutput() const
+Output getCurrentOutput() const
 
 // Set output function λ
 void setOutputFunction(OutputFunction λ)

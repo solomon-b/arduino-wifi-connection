@@ -22,7 +22,7 @@
  * 1. Input Processing: Convert events (user input, hardware) to formal inputs
  * 2. State Transition: Apply δ(currentState, input) → nextState
  * 3. Output Generation: λ(state) produces effects (LEDs, serial, WiFi operations)
- * 4. Effect Execution: Handle all I/O operations based on effects
+ * 4. Output Execution: Handle all I/O operations based on effects
  * 5. State Observation: React to state changes for UI updates
  * 
  * Hardware:
@@ -97,7 +97,7 @@ const int wifi_led_pin = 3;   // WiFi status LED (on when connected, blinks when
 //----------------------------------------------------------------------------//
 
 // Moore machine instance with transition function and initial state
-MooreMachine<AppState, Input, Effect> g_machine(transitionFunction, AppState());
+MooreMachine<AppState, Input, Output> g_machine(transitionFunction, AppState());
 
 // Global utilities
 Timer g_tickTimer(100);  // 100ms tick rate (10Hz)
@@ -178,7 +178,7 @@ void loop() {
   DEBUG_PRINTLN(state.shouldReconnect);
   
   // 1. Get current effect from Moore machine λ: Q → Γ
-  Effect effect = g_machine.getCurrentOutput();
+  Output effect = g_machine.getCurrentOutput();
   
   // 2. Execute effect (handle I/O) and get follow-up input
   Input followUpInput = executeEffect(effect);

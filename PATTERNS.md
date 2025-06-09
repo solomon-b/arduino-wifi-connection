@@ -286,18 +286,18 @@ AppState goodTransition(const AppState& state, const Input& input) {
 }
 
 // Good - pure output function
-Effect outputFunction(const AppState& state) {
+Output outputFunction(const AppState& state) {
   switch (state.mode) {
     case MODE_IDLE:
-      return Effect::ledOff();
+      return Output::ledOff();
     case MODE_WORKING:
-      return Effect::ledOn();
+      return Output::ledOn();
   }
-  return Effect::none();
+  return Output::none();
 }
 
 // Good - effect execution (separate from Moore machine)
-void executeEffect(const Effect& effect) {
+void executeEffect(const Output& effect) {
   switch (effect.type) {
     case EFFECT_LED_ON:
       digitalWrite(LED_PIN, HIGH);

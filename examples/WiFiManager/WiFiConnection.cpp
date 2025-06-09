@@ -13,7 +13,7 @@ using namespace MooreArduino;
 // Global utilities  
 extern Timer g_tickTimer;       // Defined in main file  
 extern Button g_resetButton;    // Defined in main file
-extern MooreMachine<AppState, Input, Effect> g_machine;  // Defined in main file
+extern MooreMachine<AppState, Input, Output> g_machine;  // Defined in main file
 
 //----------------------------------------------------------------------------//
 // WiFi Connection Functions

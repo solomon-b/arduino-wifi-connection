@@ -161,30 +161,30 @@ LEDState transitionFunction(const LEDState& state, const Input& input) {
 }
 ```
 
-### Effect Alphabet Γ
+### Output Alphabet Γ
 
 Define all possible effects the system can produce:
 
 ```cpp
-enum EffectType {
+enum OutputType {
   EFFECT_NONE,
   EFFECT_SET_LED_PWM,
   EFFECT_LOG_MODE_CHANGE,
   EFFECT_COUNT
 };
 
-struct Effect {
-  EffectType type;
+struct Output {
+  OutputType type;
   int ledPin;
   int pwmValue;
   ControlMode mode;
   
-  static Effect none() { Effect e; e.type = EFFECT_NONE; return e; }
-  static Effect setLEDPWM(int pin, int value) {
-    Effect e; e.type = EFFECT_SET_LED_PWM; e.ledPin = pin; e.pwmValue = value; return e;
+  static Output none() { Output e; e.type = EFFECT_NONE; return e; }
+  static Output setLEDPWM(int pin, int value) {
+    Output e; e.type = EFFECT_SET_LED_PWM; e.ledPin = pin; e.pwmValue = value; return e;
   }
-  static Effect logModeChange(ControlMode m) {
-    Effect e; e.type = EFFECT_LOG_MODE_CHANGE; e.mode = m; return e;
+  static Output logModeChange(ControlMode m) {
+    Output e; e.type = EFFECT_LOG_MODE_CHANGE; e.mode = m; return e;
   }
 };
 ```
@@ -194,7 +194,7 @@ struct Effect {
 Generate effects based on current state (Moore property):
 
 ```cpp
-Effect outputFunction(const LEDState& state) {
+Output outputFunction(const LEDState& state) {
   const int LED_PIN = 9;  // PWM pin
   
   // Calculate LED output based on current state
@@ -225,16 +225,16 @@ Effect outputFunction(const LEDState& state) {
       break;
   }
   
-  return Effect::setLEDPWM(LED_PIN, ledValue);
+  return Output::setLEDPWM(LED_PIN, ledValue);
 }
 ```
 
-### Execute Effects
+### Execute Outputs
 
 Handle all I/O operations separately:
 
 ```cpp
-void executeEffect(const Effect& effect) {
+void executeEffect(const Output& effect) {
   switch (effect.type) {
     case EFFECT_SET_LED_PWM:
       analogWrite(effect.ledPin, effect.pwmValue);
@@ -262,7 +262,7 @@ void executeEffect(const Effect& effect) {
 #include <MooreArduino.h>
 using namespace MooreArduino;
 
-MooreMachine<LEDState, Input, Effect> ledMachine(transitionFunction, LEDState());
+MooreMachine<LEDState, Input, Output> ledMachine(transitionFunction, LEDState());
 Timer sensorTimer(500);  // Read sensor every 500ms
 Button modeButton(2);
 Button patternButton(3);
@@ -279,7 +279,7 @@ void setup() {
 
 void loop() {
   // 1. Get current effect from Moore machine λ: Q → Γ
-  Effect effect = ledMachine.getCurrentOutput();
+  Output effect = ledMachine.getCurrentOutput();
   
   // 2. Execute effect (handle I/O)
   executeEffect(effect);
@@ -287,7 +287,7 @@ void loop() {
   // 3. Check for mode changes and log them
   const LEDState& state = ledMachine.getState();
   if (state.mode != lastMode) {
-    executeEffect(Effect::logModeChange(state.mode));
+    executeEffect(Output::logModeChange(state.mode));
     lastMode = state.mode;
   }
   
@@ -440,10 +440,10 @@ TempState tempTransition(const TempState& state, const TempInput& input) {
 }
 ```
 
-### Effect Alphabet Γ
+### Output Alphabet Γ
 
 ```cpp
-enum TempEffectType {
+enum TempOutputType {
   TEMP_EFFECT_NONE,
   TEMP_EFFECT_SET_LEDS,
   TEMP_EFFECT_LOG_MODE,
@@ -451,16 +451,16 @@ enum TempEffectType {
   TEMP_EFFECT_LOG_TEMP
 };
 
-struct TempEffect {
-  TempEffectType type;
+struct TempOutput {
+  TempOutputType type;
   MonitorMode mode;
   bool statusLED;
   bool alarmLED;
   float temperature;
   int sampleCount;
   
-  static TempEffect setLEDs(bool status, bool alarm) {
-    TempEffect e; e.type = TEMP_EFFECT_SET_LEDS; 
+  static TempOutput setLEDs(bool status, bool alarm) {
+    TempOutput e; e.type = TEMP_EFFECT_SET_LEDS; 
     e.statusLED = status; e.alarmLED = alarm; return e;
   }
 };
@@ -469,31 +469,31 @@ struct TempEffect {
 ### Output Function λ: Q → Γ
 
 ```cpp
-TempEffect tempOutputFunction(const TempState& state) {
+TempOutput tempOutputFunction(const TempState& state) {
   // Moore property: outputs depend only on current state
   switch (state.mode) {
     case MONITOR_IDLE:
-      return TempEffect::setLEDs(false, false);
+      return TempOutput::setLEDs(false, false);
       
     case MONITOR_SAMPLING:
-      return TempEffect::setLEDs(true, false);
+      return TempOutput::setLEDs(true, false);
       
     case MONITOR_ALARM_HIGH:
     case MONITOR_ALARM_LOW:
-      return TempEffect::setLEDs(true, (millis() / 250) % 2);
+      return TempOutput::setLEDs(true, (millis() / 250) % 2);
       
     case MONITOR_CALIBRATING:
-      return TempEffect::setLEDs((millis() / 100) % 2, false);
+      return TempOutput::setLEDs((millis() / 100) % 2, false);
   }
   
-  return TempEffect::none();
+  return TempOutput::none();
 }
 ```
 
-### Execute Effects
+### Execute Outputs
 
 ```cpp
-void executeTempEffect(const TempEffect& effect) {
+void executeTempEffect(const TempOutput& effect) {
   const int ALARM_LED = 4;
   const int STATUS_LED = 5;
   

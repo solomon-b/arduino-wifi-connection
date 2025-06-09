@@ -20,16 +20,16 @@ AppState transitionFunction(const AppState& state, const Input& input);
  * Pure output function λ: Q → Γ - generates effects based on current state
  * This implements the Moore machine property: outputs depend only on current state
  * @param state Current state q
- * @return Effect to be executed
+ * @return Output to be executed
  */
-Effect outputFunction(const AppState& state);
+Output outputFunction(const AppState& state);
 
 /**
  * Execute effects produced by the Moore machine
  * This is where all I/O operations happen
- * @param effect Effect to execute
+ * @param effect Output to execute
  * @return Follow-up input if needed, or INPUT_NONE
  */
-Input executeEffect(const Effect& effect);
+Input executeEffect(const Output& effect);
 
 #endif // WIFI_STATE_MACHINE_H
