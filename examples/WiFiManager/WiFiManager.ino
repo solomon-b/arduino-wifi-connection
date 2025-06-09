@@ -1,26 +1,28 @@
 /*
  * Arduino Giga R1 WiFi Connection Manager
- * Redux/Elm Architecture Pattern
+ * Moore Finite State Machine Implementation
  * 
- * This program implements a WiFi connection manager using the Redux/Elm Architecture
- * pattern, providing predictable state management for embedded systems.
+ * This program implements a WiFi connection manager using a Moore machine,
+ * providing predictable state management for embedded systems.
  * 
- * Key Concepts:
- * - Single Source of Truth: All application state lives in one AppState struct
- * - Unidirectional Data Flow: Events → Actions → Reducer → State → Side Effects → UI
- * - Pure Reducers: State transitions are pure functions with no side effects
- * - Immutable Updates: State is never modified directly, only replaced via reducers
- * - Side Effects Isolation: I/O operations are separated from business logic
+ * Moore Machine M = (Q, Σ, δ, λ, q₀) where:
+ * - Q: State space {INITIALIZING, CONNECTING, CONNECTED, DISCONNECTED, ENTERING_CREDENTIALS}
+ * - Σ: Input alphabet {RETRY_CONNECTION, REQUEST_CREDENTIALS, CREDENTIALS_ENTERED, WIFI_CONNECTED, etc.}
+ * - δ: Transition function (implemented as `transitionFunction`)
+ * - λ: Output function (implemented as `outputFunction` - generates follow-up inputs)
+ * - q₀: Initial state (INITIALIZING)
  * 
- * Architecture Overview (Redux Pattern):
- * 1. Event Loop: Reads events (user input, timers, hardware) and converts to Actions
- * 2. Dispatch: Coordinates the flow from Action → Reducer → Side Effects → Observers
- * 3. Reducer: Pure function that applies Actions to State (no I/O, no side effects)
- * 4. Side Effects: Handle I/O operations (WiFi, LEDs, Serial) based on state changes
- * 5. Observers: Reactive UI updates that respond to state changes
+ * Key Properties:
+ * - Outputs depend only on current state (Moore property)
+ * - State transitions are pure functions with no side effects
+ * - I/O operations are handled by output functions based on state
+ * - Deterministic: same input + state always produces same next state
  * 
- * This is NOT Functional Reactive Programming (FRP) - it lacks behaviors, events as
- * first-class values, and continuous time semantics. It's Redux-style state management.
+ * Architecture:
+ * 1. Input Processing: Convert events (user input, hardware) to formal inputs
+ * 2. State Transition: Apply δ(currentState, input) → nextState
+ * 3. Output Generation: λ(state) produces outputs (LEDs, serial, WiFi operations)
+ * 4. State Observation: React to state changes for UI updates
  * 
  * Hardware:
  * - Arduino Giga R1 WiFi board
@@ -37,7 +39,7 @@
  * - Press 'c' to change WiFi credentials
  * - Press 'r' to retry connection when disconnected
  * 
- * State Machine (Moore Machine):
+ * State Transition Diagram:
  * INITIALIZING → CONNECTING → CONNECTED ⟷ DISCONNECTED
  *                     ↓           ↗
  *              ENTERING_CREDENTIALS
@@ -49,6 +51,10 @@
 #include "kvstore_global_api.h"
 // Mbed error handling definitions
 #include <mbed_error.h>
+// MooreArduino library for Moore machine implementation and utilities
+#include <MooreArduino.h>
+
+using namespace MooreArduino;
 
 //----------------------------------------------------------------------------//
 // Debug Configuration
@@ -95,23 +101,24 @@ const int wifi_led_pin = 3;   // WiFi status LED (on when connected, blinks when
  */
 
 /*
- * ActionType: The "verbs" of our system
+ * InputType: The input alphabet Σ of our Moore machine
  * 
- * In Redux architecture, Actions represent things that happen - user inputs, timer events,
- * hardware state changes, etc. Actions are the ONLY way to change application state.
- * These are exactly like Redux actions or React useReducer actions.
+ * In Moore machine theory, inputs are symbols from a finite alphabet that trigger
+ * state transitions. These represent events that can occur in our system:
+ * user inputs, timer events, hardware state changes, etc.
  * 
- * Each action type represents an intent to change state in a specific way.
+ * Each input type represents a distinct stimulus that can cause the machine
+ * to transition from one state to another via the transition function δ.
  */
-enum ActionType {
-  ACTION_NONE,                    // No action (used as default/placeholder)
-  ACTION_RETRY_CONNECTION,        // User pressed 'r' to retry WiFi connection
-  ACTION_REQUEST_CREDENTIALS,     // User pressed 'c' to enter new WiFi credentials
-  ACTION_CREDENTIALS_ENTERED,     // User finished entering SSID and password
-  ACTION_CONNECTION_STARTED,      // WiFi.begin() was called, reset shouldReconnect flag
-  ACTION_WIFI_CONNECTED,          // Hardware detected WiFi connection established
-  ACTION_WIFI_DISCONNECTED,       // Hardware detected WiFi connection lost
-  ACTION_TICK                     // Timer event - check for state changes
+enum InputType {
+  INPUT_NONE,                     // No input (used as default/placeholder)
+  INPUT_RETRY_CONNECTION,         // User pressed 'r' to retry WiFi connection
+  INPUT_REQUEST_CREDENTIALS,      // User pressed 'c' to enter new WiFi credentials
+  INPUT_CREDENTIALS_ENTERED,      // User finished entering SSID and password
+  INPUT_CONNECTION_STARTED,       // WiFi.begin() was called, reset shouldReconnect flag
+  INPUT_WIFI_CONNECTED,           // Hardware detected WiFi connection established
+  INPUT_WIFI_DISCONNECTED,        // Hardware detected WiFi connection lost
+  INPUT_TICK                      // Timer event - check for state changes
 };
 
 /*
@@ -144,13 +151,15 @@ struct Credentials {
 };
 
 /*
- * AppMode: The "states" of our state machine
+ * AppMode: The state space Q of our Moore machine
  * 
- * This enum represents what the application is currently doing.
- * In functional programming, explicit state machines make behavior predictable.
- * Each mode determines what UI to show and what actions are valid.
+ * This enum represents the finite set of states our Moore machine can be in.
+ * In Moore machine theory, the output (LED patterns, UI messages) depends
+ * only on the current state, not on the input that caused the transition.
  * 
- * State transitions:
+ * State space Q = {INITIALIZING, CONNECTING, CONNECTED, DISCONNECTED, ENTERING_CREDENTIALS}
+ * 
+ * State transitions via δ: Q × Σ → Q:
  * INITIALIZING → CONNECTING → CONNECTED ⇄ DISCONNECTED
  *                   ↓           ↗
  *            ENTERING_CREDENTIALS
@@ -164,10 +173,17 @@ enum AppMode {
 };
 
 /*
- * AppState: Single Source of Truth
+ * AppState: Current state q ∈ Q of the Moore machine
  * 
- * This struct contains ALL application state. In Redux architecture, having one place
- * where all state lives makes the system predictable and debuggable.
+ * This struct represents the complete state of our Moore machine at any given time.
+ * In Moore machine theory, this is the current configuration that determines:
+ * 1. What outputs are produced (λ(q) → outputs)
+ * 2. What transitions are possible given an input (δ(q, σ) → q')
+ * 
+ * The state contains all information needed to:
+ * - Determine current outputs (LED states, UI messages)
+ * - Process the next input symbol
+ * - Maintain system consistency across state transitions
  * 
  * Key C++ concepts:
  * - Constructor: Special method called when creating an object
@@ -197,11 +213,12 @@ struct AppState {
 };
 
 /*
- * Action: Messages that describe state changes
+ * Input: Symbols from input alphabet Σ
  * 
- * Actions carry information about what happened. They're like messages
- * sent to the reducer to request a state change. The reducer decides
- * how to update state based on the action type and data.
+ * Input symbols carry information about events that occurred. They are formal
+ * symbols from our input alphabet Σ that are fed to the transition function δ.
+ * The transition function δ(q, σ) uses current state q and input symbol σ
+ * to determine the next state q'.
  * 
  * Key C++ concepts:
  * - static methods: Class methods that don't need an object instance
@@ -209,59 +226,65 @@ struct AppState {
  * - const reference: Efficient way to pass objects without copying
  * - Ternary operator: condition ? value_if_true : value_if_false
  */
-struct Action {
-  ActionType type;                // What kind of action this is
-  Credentials newCredentials;     // New credentials (if ACTION_CREDENTIALS_ENTERED)
-  int wifiStatus;                // WiFi status code (if ACTION_WIFI_*)
+struct Input {
+  InputType type;                 // Which input symbol this is
+  Credentials newCredentials;     // New credentials (if INPUT_CREDENTIALS_ENTERED)
+  int wifiStatus;                // WiFi status code (if INPUT_WIFI_*)
   
-  // Factory methods: Static functions that create Actions
+  // Default constructor
+  Input() : type(INPUT_NONE), wifiStatus(0) {
+    newCredentials.ssid[0] = '\0';
+    newCredentials.pass[0] = '\0';
+  }
+  
+  // Factory methods: Static functions that create Input symbols
   // These are like constructors but more explicit about what they create
   
-  static Action none() {
-    Action a;                     // Create empty Action on the stack
-    a.type = ACTION_NONE;
-    return a;                     // Return by value (copied)
+  static Input none() {
+    Input i;                      // Create empty Input on the stack
+    i.type = INPUT_NONE;
+    return i;                     // Return by value (copied)
   }
   
-  static Action retryConnection() {
-    Action a;
-    a.type = ACTION_RETRY_CONNECTION;
-    return a;
+  static Input retryConnection() {
+    Input i;
+    i.type = INPUT_RETRY_CONNECTION;
+    return i;
   }
   
-  static Action requestCredentials() {
-    Action a;
-    a.type = ACTION_REQUEST_CREDENTIALS;
-    return a;
+  static Input requestCredentials() {
+    Input i;
+    i.type = INPUT_REQUEST_CREDENTIALS;
+    return i;
   }
   
   // const Credentials& means "reference to Credentials that won't be modified"
   // This avoids copying the 128-byte Credentials struct
-  static Action credentialsEntered(const Credentials& creds) {
-    Action a;
-    a.type = ACTION_CREDENTIALS_ENTERED;
-    a.newCredentials = creds;     // This DOES copy the credentials
-    return a;
+  static Input credentialsEntered(const Credentials& creds) {
+    Input i;
+    i.type = INPUT_CREDENTIALS_ENTERED;
+    i.newCredentials = creds;     // This DOES copy the credentials
+    return i;
   }
   
-  static Action connectionStarted() {
-    Action a;
-    a.type = ACTION_CONNECTION_STARTED;
-    return a;
+  static Input connectionStarted() {
+    Input i;
+    i.type = INPUT_CONNECTION_STARTED;
+    return i;
   }
   
   // Ternary operator: condition ? value_if_true : value_if_false
-  static Action wifiStatusChanged(int status) {
-    Action a;
-    a.type = (status == WL_CONNECTED) ? ACTION_WIFI_CONNECTED : ACTION_WIFI_DISCONNECTED;
-    a.wifiStatus = status;
-    return a;
+  static Input wifiStatusChanged(int status) {
+    Input i;
+    i.type = (status == WL_CONNECTED) ? INPUT_WIFI_CONNECTED : INPUT_WIFI_DISCONNECTED;
+    i.wifiStatus = status;
+    return i;
   }
   
-  static Action tick() {
-    Action a;
-    a.type = ACTION_TICK;
-    return a;
+  static Input tick() {
+    Input i;
+    i.type = INPUT_TICK;
+    return i;
   }
 };
 
@@ -270,16 +293,12 @@ struct Action {
 //----------------------------------------------------------------------------//
 
 /*
- * Global variable holding the current application state.
+ * Global utilities (machine declared later after transition function definition)
  * 
- * In C++, global variables are created when the program starts and live
- * until the program ends. The 'g_' prefix is a naming convention indicating
- * this is a global variable.
- * 
- * In Redux architecture, we minimize global state, but we need one place
- * to hold the current state. All state changes go through the reducer.
+ * Using the ReduxArduino library for state management.
  */
-AppState g_currentState;  // The one and only source of truth for app state
+Timer g_tickTimer(100);  // 100ms tick rate (10Hz)
+Button g_resetButton(4); // Optional reset button on pin 4
 
 //----------------------------------------------------------------------------//
 // Debug Helper Functions  
@@ -299,6 +318,25 @@ const char* getModeString(AppMode mode) {
   }
 }
 #endif
+
+//----------------------------------------------------------------------------//
+// Forward Declarations
+//----------------------------------------------------------------------------//
+
+// Declare functions that are used before they're defined
+AppState transitionFunction(const AppState& state, const Input& input);
+Input outputFunction(const AppState& oldState, const AppState& newState);
+void observeConnectedState(const AppState& oldState, const AppState& newState);
+void observeDisconnectedState(const AppState& oldState, const AppState& newState);
+void observeCredentialChanges(const AppState& oldState, const AppState& newState);
+bool loadCredentials(Credentials* creds);
+
+//----------------------------------------------------------------------------//
+// Moore Machine Declaration (after transition function definition)
+//----------------------------------------------------------------------------//
+
+// Create the Moore machine with transition function and initial state
+MooreMachine<AppState, Input> g_machine(transitionFunction, AppState());
 
 //----------------------------------------------------------------------------//
 
@@ -337,14 +375,26 @@ void setup() {
   Serial.print("WiFi firmware: ");
   Serial.println(WiFi.firmwareVersion());
 
+  // Set up store observers for reactive UI updates
+  g_machine.addStateObserver(observeConnectedState);
+  g_machine.addStateObserver(observeDisconnectedState);
+  g_machine.addStateObserver(observeCredentialChanges);
+  
+  // Set up output function
+  g_machine.setOutputFunction(outputFunction);
+  
+  // Start tick timer
+  g_tickTimer.start();
+  
   // Attempt to load saved WiFi credentials from flash memory
-  if (!loadCredentials(&g_currentState.credentials)) {
+  Credentials loadedCreds;
+  if (!loadCredentials(&loadedCreds)) {
     Serial.println("No stored credentials.");
     // No credentials found - start credential entry process
-    dispatch(Action::requestCredentials());
+    g_machine.step(Input::requestCredentials());
   } else {
-    // Credentials found - attempt to connect
-    dispatch(Action::retryConnection());
+    // Credentials found - inject them into state and attempt to connect
+    g_machine.step(Input::credentialsEntered(loadedCreds));
   }
 }
 
@@ -582,77 +632,77 @@ void connectWiFi(const Credentials* creds) {
 // Pure Functions
 //----------------------------------------------------------------------------//
 
-// Parse single character user input into Actions (pure function)
+// Parse single character user input into Input symbols (pure function)
 // Only accepts input that's valid for current mode
-Action parseUserInput(char input, AppMode currentMode) {
+Input parseUserInput(char input, AppMode currentMode) {
   switch (input) {
     case 'r':  // Retry connection
     case 'R':
       // Only allow retry when disconnected
-      return (currentMode == MODE_DISCONNECTED) ? Action::retryConnection() : Action::none();
+      return (currentMode == MODE_DISCONNECTED) ? Input::retryConnection() : Input::none();
     case 'c':  // Change credentials
     case 'C':
       // Allow credential change from any mode
-      return Action::requestCredentials();
+      return Input::requestCredentials();
     default:
       // Ignore unknown input
-      return Action::none();
+      return Input::none();
   }
 }
 
 //----------------------------------------------------------------------------//
-// Pure Reducers (State Transitions)
+// State Transition Function δ: Q × Σ → Q
 //----------------------------------------------------------------------------//
 
-// Core reducer function - transforms state based on actions (pure function)
-// This is the heart of the Redux system - all state changes happen here
-AppState reduce(const AppState& state, const Action& action) {
+// State transition function δ: Q × Σ → Q (pure function)
+// This is the heart of the Moore machine - implements δ(q, σ) → q'
+AppState transitionFunction(const AppState& state, const Input& input) {
   AppState newState = state;          // Copy current state
-  newState.lastUpdate = millis();     // Update timestamp on every action
+  newState.lastUpdate = millis();     // Update timestamp on every input
   
-  switch (action.type) {
-    case ACTION_NONE:
-      // No-op action - return state unchanged
+  switch (input.type) {
+    case INPUT_NONE:
+      // No-op input - return state unchanged
       return newState;
       
-    case ACTION_REQUEST_CREDENTIALS:
+    case INPUT_REQUEST_CREDENTIALS:
       // User wants to enter new WiFi credentials
       newState.mode = MODE_ENTERING_CREDENTIALS;
       return newState;
       
-    case ACTION_CREDENTIALS_ENTERED:
+    case INPUT_CREDENTIALS_ENTERED:
       // User finished entering credentials - prepare for connection
-      newState.credentials = action.newCredentials;  // Store new credentials
+      newState.credentials = input.newCredentials;  // Store new credentials
       newState.credentialsChanged = true;           // Flag for persistence
       newState.shouldReconnect = true;              // Flag for connection attempt
       newState.mode = MODE_CONNECTING;              // Change to connecting state
       return newState;
       
-    case ACTION_CONNECTION_STARTED:
+    case INPUT_CONNECTION_STARTED:
       // WiFi.begin() was called - clear the reconnect flag
       newState.shouldReconnect = false;
       return newState;
       
-    case ACTION_RETRY_CONNECTION:
+    case INPUT_RETRY_CONNECTION:
       // User requested connection retry
       newState.shouldReconnect = true;   // Set flag for side effects
       newState.mode = MODE_CONNECTING;   // Change to connecting state
       return newState;
       
-    case ACTION_WIFI_CONNECTED:
+    case INPUT_WIFI_CONNECTED:
       // Hardware reports successful WiFi connection
       newState.mode = MODE_CONNECTED;           // Update mode
-      newState.wifiStatus = action.wifiStatus;  // Store hardware status
+      newState.wifiStatus = input.wifiStatus;  // Store hardware status
       newState.shouldReconnect = false;        // Clear retry flag
       return newState;
       
-    case ACTION_WIFI_DISCONNECTED:
+    case INPUT_WIFI_DISCONNECTED:
       // Hardware reports WiFi connection lost
       newState.mode = MODE_DISCONNECTED;        // Update mode
-      newState.wifiStatus = action.wifiStatus;  // Store hardware status
+      newState.wifiStatus = input.wifiStatus;  // Store hardware status
       return newState;
       
-    case ACTION_TICK: {
+    case INPUT_TICK: {
       // Periodic status check - poll WiFi hardware
       int currentWifiStatus = WiFi.status();
       if (currentWifiStatus != newState.wifiStatus) {
@@ -668,11 +718,12 @@ AppState reduce(const AppState& state, const Action& action) {
     }
       
     default:
-      // Unknown action type - log and return unchanged state
-      DEBUG_PRINTLN("Unknown action type in reducer");
+      // Unknown input type - log and return unchanged state
+      DEBUG_PRINTLN("Unknown input type in transition function");
       return newState;
   }
 }
+
 
 //----------------------------------------------------------------------------//
 // Pure Helper Functions
@@ -694,12 +745,13 @@ bool isValidCredentialLength(const String& credential) {
 }
 
 //----------------------------------------------------------------------------//
-// Side Effects System
+// Output Function λ: Q → Γ (generates follow-up inputs)
 //----------------------------------------------------------------------------//
 
-// Perform side effects based on state changes - this is where I/O happens
-// Returns follow-up action if needed, or ACTION_NONE
-Action performSideEffects(const AppState& oldState, const AppState& newState) {
+// Output function λ: Q → Γ - generates follow-up inputs based on state changes
+// This is where I/O happens in response to state transitions
+// Returns follow-up input if needed, or INPUT_NONE
+Input outputFunction(const AppState& oldState, const AppState& newState) {
   // Update LED indicators when mode changes
   if (newState.mode != oldState.mode) {
     updateLEDs(newState);  // Hardware I/O: control LED pins
@@ -715,7 +767,7 @@ Action performSideEffects(const AppState& oldState, const AppState& newState) {
     Serial.println("Initiating WiFi connection...");  // Serial I/O
     connectWiFi(&newState.credentials);               // Network I/O: start connection
     // Return action to clear the shouldReconnect flag
-    return Action::connectionStarted();
+    return Input::connectionStarted();
   }
   
   // Update serial UI when mode changes
@@ -723,7 +775,7 @@ Action performSideEffects(const AppState& oldState, const AppState& newState) {
     renderUI(newState);  // Serial I/O: display status
   }
   
-  return Action::none();  // No follow-up action needed
+  return Input::none();  // No follow-up input needed
 }
 
 // Update LED indicators based on current application mode
@@ -771,30 +823,37 @@ void renderUI(const AppState& state) {
 }
 
 //----------------------------------------------------------------------------//
-// Event Dispatch System
+// Input Symbol Generation
 //----------------------------------------------------------------------------//
 
-// Read events from environment and convert to Actions
-// This is the input layer of the Redux system
-Action readEvents(const AppState& state) {
+// Read events from environment and convert to Input symbols
+// This is the input layer of the Moore machine
+Input readEvents() {
+  const AppState& state = g_machine.getState();
+  
   // Check for user input via serial (highest priority)
   char input = readSingleChar();
   if (input != '\0') {
-    return parseUserInput(input, state.mode);  // Convert char to Action
+    return parseUserInput(input, state.mode);  // Convert char to Input
   }
   
-  // Always return tick action to keep system updating
-  // Tick actions poll hardware status and handle timing
-  return Action::tick();
+  // Check if tick timer has expired
+  if (g_tickTimer.expired()) {
+    g_tickTimer.restart();
+    return Input::tick();
+  }
+  
+  // Check for reset button press (optional)
+  if (g_resetButton.wasPressed()) {
+    return Input::requestCredentials();
+  }
+  
+  return Input::none();
 }
 
 //----------------------------------------------------------------------------//
 // State Observers (Reactive UI Updates)
 //----------------------------------------------------------------------------//
-
-// Function pointer type for state observers
-// Observers react to state changes without affecting the main data flow
-typedef void (*StateObserver)(const AppState& oldState, const AppState& newState);
 
 // Observer: React to successful WiFi connection
 void observeConnectedState(const AppState& oldState, const AppState& newState) {
@@ -822,91 +881,54 @@ void observeCredentialChanges(const AppState& oldState, const AppState& newState
   }
 }
 
-// Array of observer functions - easily extensible for new reactive features
-StateObserver g_observers[] = {
-  observeConnectedState,     // React to connection success
-  observeDisconnectedState,  // React to connection loss
-  observeCredentialChanges   // React to credential updates
-};
-
-// Calculate number of observers at compile time
-const int g_observerCount = sizeof(g_observers) / sizeof(g_observers[0]);
-
-// Call all registered observers with state change information
-void notifyObservers(const AppState& oldState, const AppState& newState) {
-  for (int i = 0; i < g_observerCount; i++) {
-    g_observers[i](oldState, newState);  // Call each observer function
-  }
-}
-
-//----------------------------------------------------------------------------//
-// Central Dispatch Function
-//----------------------------------------------------------------------------//
-
-// Central dispatch function - orchestrates the entire Redux data flow
-// This is the "main loop" of the Redux system
-void dispatch(Action action) {
-  AppState oldState = g_currentState;  // Capture current state for comparison
-  
-  // 1. Apply action to current state via pure reducer
-  g_currentState = reduce(g_currentState, action);
-  
-  // 2. Execute side effects (I/O operations) based on state changes
-  Action followUpAction = performSideEffects(oldState, g_currentState);
-  
-  // 3. Notify all observers of the state change (reactive updates)
-  notifyObservers(oldState, g_currentState);
-  
-  // 4. Handle any follow-up action returned by side effects
-  if (followUpAction.type != ACTION_NONE) {
-    // Recursively process follow-up action (e.g., clearing flags)
-    AppState prevState = g_currentState;
-    g_currentState = reduce(g_currentState, followUpAction);
-    notifyObservers(prevState, g_currentState);  // Notify observers of follow-up
-  }
-}
+// Note: State transitions are now handled by the MooreMachine automatically
 
 //----------------------------------------------------------------------------//
 // Main Event Loop
 //----------------------------------------------------------------------------//
 
 // Arduino main loop - called continuously after setup()
-// This is the event loop that drives the entire Redux system
+// This is the event loop that drives the entire Moore machine
 void loop() {
+  const AppState& state = g_machine.getState();
+  
   // Debug logging of current state (only when DEBUG_ENABLED=1)
   DEBUG_PRINT("DEBUG: Loop iteration, mode=");
-  DEBUG_PRINT(g_currentState.mode);
+  DEBUG_PRINT(state.mode);
   DEBUG_PRINT(" (");
-  DEBUG_PRINT(getModeString(g_currentState.mode));
+  DEBUG_PRINT(getModeString(state.mode));
   DEBUG_PRINT("), shouldReconnect=");
-  DEBUG_PRINTLN(g_currentState.shouldReconnect);
+  DEBUG_PRINTLN(state.shouldReconnect);
   
   // Read events from environment (user input, hardware status)
-  Action action = readEvents(g_currentState);
-  DEBUG_PRINT("DEBUG: Action type=");
-  DEBUG_PRINTLN(action.type);
+  Input input = readEvents();
   
-  // Special handling for credential entry (only blocking operation)
-  if (action.type == ACTION_REQUEST_CREDENTIALS) {
-    dispatch(action);  // First, change to credential entry mode
+  if (input.type != INPUT_NONE) {
+    DEBUG_PRINT("DEBUG: Input type=");
+    DEBUG_PRINTLN(input.type);
     
-    // Blocking credential prompt (breaks Redux pattern but necessary for UX)
-    Credentials newCreds;
-    if (promptForCredentialsBlocking(&newCreds)) {
-      DEBUG_PRINTLN("DEBUG: About to dispatch credentialsEntered");
-      dispatch(Action::credentialsEntered(newCreds));  // Process entered credentials
-      DEBUG_PRINTLN("DEBUG: After dispatch credentialsEntered");
-      // Continue loop - don't return early
+    // Special handling for credential entry (only blocking operation)
+    if (input.type == INPUT_REQUEST_CREDENTIALS) {
+      g_machine.step(input);  // First, change to credential entry mode
+      
+      // Blocking credential prompt (breaks Redux pattern but necessary for UX)
+      Credentials newCreds;
+      if (promptForCredentialsBlocking(&newCreds)) {
+        DEBUG_PRINTLN("DEBUG: About to process credentialsEntered input");
+        g_machine.step(Input::credentialsEntered(newCreds));  // Process entered credentials
+        DEBUG_PRINTLN("DEBUG: After processing credentialsEntered input");
+        // Continue loop - don't return early
+      } else {
+        // Credential entry failed - revert to previous state
+        g_machine.step(Input::tick());  // Tick will update mode based on WiFi status
+      }
     } else {
-      // Credential entry failed - revert to previous state
-      dispatch(Action::tick());  // Tick will update mode based on WiFi status
+      // Normal case - process input through Moore machine
+      g_machine.step(input);
     }
-  } else {
-    // Normal case - dispatch action through Redux system
-    dispatch(action);
   }
   
-  delay(100);  // 100ms delay = 10Hz update rate (responsive but not overwhelming)
+  delay(10);  // Small delay to prevent overwhelming the system
 }
 
 // Display detailed information about current WiFi connection

@@ -1,550 +1,376 @@
-# Common Patterns & Tips
+# Moore Machine Patterns & Best Practices
 
-Quick reference for Redux-style Arduino code.
+Advanced patterns and quick reference for experienced Moore machine developers.
 
-## Basic Rules
+## Quick Rules
 
 ### Do This
-- Keep all state in one struct
-- Change state only through reducers
-- Handle I/O outside of reducers
-- Use enums instead of magic numbers
-- Name actions based on what happened, not what you want to do
+- Define finite state spaces with enums + validation
+- Keep transition functions pure (no I/O, no side effects)
+- Handle all I/O in output functions
+- Use meaningful names and document state diagrams
+- Validate state invariants with assertions
 
-### Don't Do This
-- Scatter state variables everywhere
-- Mix I/O with state logic
-- Modify state directly
-- Block the main loop with long operations
-- Use meaningless names like `SET_FLAG_1`
+### Don't Do This  
+- Put I/O operations in transition functions
+- Use unbounded state spaces (counters without limits)
+- Make non-deterministic transitions
+- Mix business logic with I/O handling
 
-## Common Patterns
+## Advanced Patterns
 
-### 1. State Setup
+### 1. Hierarchical State Machines
 
-Always provide sensible defaults:
+Break complex systems into subsystems with their own state machines:
+
+```cpp
+enum LEDMode { LED_OFF, LED_ON, LED_BLINK };
+enum WiFiMode { WIFI_DISCONNECTED, WIFI_CONNECTING, WIFI_CONNECTED };
+
+struct SystemState {
+  LEDMode ledMode;
+  WiFiMode wifiMode;
+  bool systemEnabled;
+};
+
+// Separate transition functions for each subsystem
+LEDMode updateLED(LEDMode current, const Input& input) {
+  if (!input.isLEDInput()) return current;
+  // ... LED-specific logic
+}
+
+WiFiMode updateWiFi(WiFiMode current, const Input& input) {
+  if (!input.isWiFiInput()) return current;
+  // ... WiFi-specific logic
+}
+
+SystemState transitionFunction(const SystemState& state, const Input& input) {
+  SystemState newState = state;
+  
+  // Update subsystems
+  newState.ledMode = updateLED(state.ledMode, input);
+  newState.wifiMode = updateWiFi(state.wifiMode, input);
+  
+  // System-level transitions
+  if (input.type == INPUT_SYSTEM_SHUTDOWN) {
+    newState.systemEnabled = false;
+    newState.ledMode = LED_OFF;
+    newState.wifiMode = WIFI_DISCONNECTED;
+  }
+  
+  return newState;
+}
+```
+
+### 2. Timeout Handling
+
+Use state entry times for automatic transitions:
 
 ```cpp
 struct AppState {
-  bool isConnected;
+  SystemMode mode;
+  unsigned long stateEntryTime;
+  
+  // State-specific timeouts
+  unsigned long getTimeout() const {
+    switch (mode) {
+      case MODE_CONNECTING: return 30000;  // 30 second timeout
+      case MODE_WORKING: return 10000;     // 10 second timeout
+      default: return 0;                   // No timeout
+    }
+  }
+  
+  bool hasTimedOut() const {
+    unsigned long timeout = getTimeout();
+    return timeout > 0 && (millis() - stateEntryTime > timeout);
+  }
+};
+
+AppState transitionFunction(const AppState& state, const Input& input) {
+  AppState newState = state;
+  
+  // Check for timeout on every tick
+  if (input.type == INPUT_TICK && state.hasTimedOut()) {
+    newState.mode = MODE_ERROR;
+    newState.stateEntryTime = millis();
+    return newState;
+  }
+  
+  // Update state entry time on transitions
+  if (newState.mode != state.mode) {
+    newState.stateEntryTime = millis();
+  }
+  
+  return newState;
+}
+```
+
+### 3. Error Recovery with Retry Logic
+
+Design robust error handling with bounded retries:
+
+```cpp
+struct AppState {
+  SystemMode mode;
+  int errorCode;
   int retryCount;
-  unsigned long lastTry;
+  unsigned long lastRetryTime;
   
-  // Set reasonable defaults
-  AppState() : isConnected(false), retryCount(0), lastTry(0) {}
-};
-```
-
-### 2. Action Factories
-
-Use static methods to create actions:
-
-```cpp
-struct Action {
-  ActionType type;
-  int value;
-  
-  static Action connect() {
-    Action a;
-    a.type = CONNECT;
-    return a;
-  }
-  
-  static Action setBrightness(int brightness) {
-    Action a;
-    a.type = SET_BRIGHTNESS;
-    a.value = constrain(brightness, 0, 255);  // validate here
-    return a;
-  }
-};
-```
-
-### 3. Timers
-
-Simple timer pattern:
-
-```cpp
-struct Timer {
-  unsigned long interval;
-  unsigned long lastTrigger;
-  bool running;
-  
-  Timer(unsigned long ms) : interval(ms), lastTrigger(0), running(false) {}
-  
-  void start() {
-    lastTrigger = millis();
-    running = true;
-  }
-  
-  bool expired() {
-    return running && (millis() - lastTrigger >= interval);
-  }
-  
-  void stop() { running = false; }
-  
-  void restart() { start(); }
+  static const int MAX_RETRIES = 3;
+  static const unsigned long RETRY_DELAY = 5000;  // 5 seconds
 };
 
-// Use in your state
-struct AppState {
-  Timer heartbeat;
-  Timer reconnect;
+AppState transitionFunction(const AppState& state, const Input& input) {
+  AppState newState = state;
   
-  AppState() : heartbeat(1000), reconnect(30000) {
-    heartbeat.start();
-  }
-};
-
-// In your reducer
-case ACTION_TICK:
-  if (state.heartbeat.expired()) {
-    newState.heartbeat.restart();
-    // do heartbeat stuff
-  }
-  break;
-```
-
-### 4. Reading Events
-
-Handle different priority levels:
-
-```cpp
-Action readEvents(const AppState& state) {
-  // High priority: safety/emergency
-  if (digitalRead(EMERGENCY_STOP_PIN) == LOW) {
-    return Action::emergencyStop();
-  }
-  
-  // Medium priority: user input
-  if (digitalRead(BUTTON_PIN) == LOW) {
-    delay(50);  // simple debounce
-    return Action::buttonPressed();
-  }
-  
-  // Low priority: sensors, timers
-  static unsigned long lastSensorRead = 0;
-  if (millis() - lastSensorRead > 1000) {
-    lastSensorRead = millis();
-    int temp = analogRead(TEMP_SENSOR_PIN);
-    return Action::temperatureRead(temp);
-  }
-  
-  // Always return something
-  return Action::tick();
-}
-```
-
-### 5. State Machine Validation
-
-Prevent invalid transitions:
-
-```cpp
-bool validTransition(AppMode from, AppMode to) {
-  switch (from) {
-    case MODE_IDLE:
-      return to == MODE_RUNNING || to == MODE_SETUP;
-    case MODE_RUNNING:
-      return to == MODE_IDLE || to == MODE_ERROR;
-    case MODE_ERROR:
-      return to == MODE_IDLE;  // can only go back to idle
-    default:
-      return false;
-  }
-}
-
-// Use in reducer
-case ACTION_CHANGE_MODE:
-  if (validTransition(state.mode, action.newMode)) {
-    newState.mode = action.newMode;
-  }
-  break;
-```
-
-### 6. Side Effects That Chain
-
-Sometimes one side effect triggers another action:
-
-```cpp
-Action handleSideEffects(const AppState& oldState, const AppState& newState) {
-  // Update LEDs immediately
-  if (newState.mode != oldState.mode) {
-    updateStatusLED(newState.mode);
-  }
-  
-  // Start WiFi connection (might need follow-up)
-  if (newState.shouldConnect && !oldState.shouldConnect) {
-    WiFi.begin(newState.ssid, newState.password);
-    return Action::connectionStarted();  // clears the flag
-  }
-  
-  // Save settings in background
-  if (newState.settingsChanged && !oldState.settingsChanged) {
-    saveToEEPROM(newState.settings);
-  }
-  
-  return Action::none();
-}
-```
-
-### 7. Button Debouncing
-
-Cleaner button handling:
-
-```cpp
-struct Button {
-  int pin;
-  bool lastState;
-  unsigned long lastChange;
-  
-  Button(int p) : pin(p), lastState(HIGH), lastChange(0) {
-    pinMode(pin, INPUT_PULLUP);
-  }
-  
-  bool wasPressed() {
-    bool currentState = digitalRead(pin);
+  if (input.type == INPUT_ERROR_OCCURRED) {
+    newState.mode = MODE_ERROR;
+    newState.errorCode = input.errorCode;
     
-    if (currentState != lastState) {
-      lastChange = millis();
+    // Increment retry count
+    if (state.mode != MODE_ERROR) {
+      newState.retryCount = 1;
+    } else {
+      newState.retryCount = state.retryCount + 1;
     }
     
-    if (millis() - lastChange > 50) {  // debounce delay
-      if (currentState != lastState) {
-        lastState = currentState;
-        return currentState == LOW;  // button pressed
+    newState.lastRetryTime = millis();
+  }
+  
+  // Auto-retry logic
+  if (state.mode == MODE_ERROR && input.type == INPUT_TICK) {
+    if (state.retryCount < AppState::MAX_RETRIES) {
+      unsigned long elapsed = millis() - state.lastRetryTime;
+      if (elapsed > AppState::RETRY_DELAY) {
+        newState.mode = MODE_IDLE;  // Retry
+        newState.errorCode = 0;
+      }
+    } else {
+      // Max retries exceeded - give up
+      newState.mode = MODE_SHUTDOWN;
+    }
+  }
+  
+  return newState;
+}
+```
+
+### 4. Input Validation at System Boundaries
+
+Sanitize inputs before they enter the state machine:
+
+```cpp
+Input readEnvironment() {
+  // Debounced button reading
+  static bool lastButtonState = HIGH;
+  static unsigned long lastDebounceTime = 0;
+  const unsigned long DEBOUNCE_DELAY = 50;
+  
+  bool buttonState = digitalRead(BUTTON_PIN);
+  if (buttonState != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+  
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
+    if (buttonState == LOW && lastButtonState == HIGH) {
+      lastButtonState = buttonState;
+      return Input::buttonPress(BUTTON_PIN);
+    }
+  }
+  lastButtonState = buttonState;
+  
+  // Sensor validation
+  int sensorValue = analogRead(SENSOR_PIN);
+  if (sensorValue < 0 || sensorValue > 1023) {
+    return Input::errorOccurred(-1);  // Invalid sensor reading
+  }
+  
+  // Command parsing with validation
+  if (Serial.available()) {
+    String command = Serial.readString();
+    command.trim();
+    
+    if (command == "shutdown") {
+      return Input::shutdownRequested();
+    } else if (command.startsWith("set ")) {
+      int value = command.substring(4).toInt();
+      if (value >= 0 && value <= 100) {  // Validate range
+        return Input::setValue(value);
+      } else {
+        Serial.println("Error: Value must be 0-100");
+        return Input::none();
       }
     }
-    
-    return false;
   }
-};
+  
+  return Input::none();
+}
 ```
 
-### 8. Error Handling
+## Performance Optimization
 
-Simple error tracking:
+### 1. Minimize State Copying
 
 ```cpp
-enum ErrorCode {
-  ERROR_NONE,
-  ERROR_WIFI_FAILED,
-  ERROR_SENSOR_TIMEOUT,
-  ERROR_STORAGE_FULL
-};
-
+// Good - minimal state
 struct AppState {
-  ErrorCode error;
-  unsigned long errorTime;
-  
-  void setError(ErrorCode code) {
-    error = code;
-    errorTime = millis();
-  }
-  
-  void clearError() {
-    error = ERROR_NONE;
-  }
-  
-  bool hasError() {
-    return error != ERROR_NONE;
-  }
+  SystemMode mode;
+  uint16_t counter;
+  uint8_t flags;
 };
 
-// In reducer
-case ACTION_WIFI_FAILED:
-  newState.setError(ERROR_WIFI_FAILED);
-  newState.mode = MODE_DISCONNECTED;
-  break;
-
-case ACTION_ERROR_ACKNOWLEDGED:
-  newState.clearError();
-  break;
+// Bad - large state that's expensive to copy
+struct BadState {
+  char largeBuffer[1024];
+  float matrix[100][100];
+  String dynamicString;  // Heap allocation
+};
 ```
 
-### 9. Async Operations
-
-Track long-running operations:
+### 2. Optimize Hot Paths
 
 ```cpp
-struct AsyncOp {
-  bool active;
-  unsigned long startTime;
-  unsigned long timeout;
-  
-  AsyncOp() : active(false), startTime(0), timeout(0) {}
-  
-  void start(unsigned long timeoutMs) {
-    active = true;
-    startTime = millis();
-    timeout = timeoutMs;
+AppState transitionFunction(const AppState& state, const Input& input) {
+  // Fast path for common inputs
+  if (input.type == INPUT_TICK) {
+    AppState newState = state;
+    // ... minimal tick processing
+    return newState;
   }
   
-  void finish() {
-    active = false;
-  }
-  
-  bool timedOut() {
-    return active && (millis() - startTime > timeout);
-  }
-};
+  // Full processing for other inputs
+  return fullTransitionFunction(state, input);
+}
+```
 
-// In your state
+### 3. Memory Management for Embedded
+
+```cpp
+// Use stack allocation, avoid heap
 struct AppState {
-  AsyncOp wifiConnection;
+  char buffer[32];                    // Fixed size, stack allocated
+  StaticJsonDocument<256> config;     // Fixed size JSON
+  uint8_t data[16];                   // Known bounds
 };
 
-// In reducer
-case ACTION_START_WIFI:
-  newState.wifiConnection.start(30000);  // 30 second timeout
-  break;
-
-case ACTION_WIFI_CONNECTED:
-  newState.wifiConnection.finish();
-  break;
-
-case ACTION_TICK:
-  if (state.wifiConnection.timedOut()) {
-    newState.wifiConnection.finish();
-    newState.setError(ERROR_WIFI_TIMEOUT);
-  }
-  break;
-```
-
-## Memory Tips
-
-### Use the Stack
-
-```cpp
-// Good - stack allocated, automatic cleanup
-void processCommand() {
-  char buffer[64];
-  // use buffer...
-  // automatically cleaned up when function exits
-}
-
-// Avoid - heap allocation, manual cleanup
-void processCommand() {
-  char* buffer = malloc(64);
-  // use buffer...
-  free(buffer);  // easy to forget!
-}
-```
-
-### Fixed-Size Strings
-
-```cpp
-// Good - predictable memory use
-struct Config {
-  char ssid[32];
-  char password[64];
+// Avoid in embedded systems
+struct BadState {
+  String dynamicString;               // Heap allocated
+  std::vector<int> list;              // Dynamic size
+  char* pointer;                      // Manual memory management
 };
-
-// Avoid - dynamic allocation
-struct Config {
-  String ssid;      // can fragment memory
-  String password;
-};
-
-// Use String for temporary work only
-void handleCommand() {
-  String cmd = Serial.readStringUntil('\n');
-  cmd.trim();
-  
-  // Convert to fixed storage
-  if (cmd.startsWith("SSID:")) {
-    cmd.substring(5).toCharArray(config.ssid, sizeof(config.ssid));
-  }
-}
-```
-
-### Check Memory Usage
-
-```cpp
-void printMemoryInfo() {
-  extern char _end;
-  extern "C" char *sbrk(int i);
-  char *ramstart = (char *)0x20070000;
-  char *ramend = (char *)0x20088000;
-  char *heapend = sbrk(0);
-  
-  Serial.print("Free RAM: ");
-  Serial.println((int)ramend - (int)heapend);
-}
-```
-
-## Performance Tips
-
-### Consistent Timing
-
-```cpp
-void loop() {
-  static unsigned long lastUpdate = 0;
-  
-  if (millis() - lastUpdate >= 100) {  // 10Hz update rate
-    Action action = readEvents(g_state);
-    dispatch(action);
-    lastUpdate = millis();
-  }
-  
-  // Don't use delay() - let other stuff run
-}
-```
-
-### Debug Macros
-
-```cpp
-#define DEBUG_ENABLED 1
-
-#if DEBUG_ENABLED
-  #define DEBUG_PRINT(x) Serial.print(x)
-  #define DEBUG_PRINTLN(x) Serial.println(x)
-#else
-  #define DEBUG_PRINT(x)
-  #define DEBUG_PRINTLN(x)
-#endif
-
-// Usage
-DEBUG_PRINTLN("Starting WiFi connection...");
-```
-
-### Efficient String Building
-
-```cpp
-// Good - single allocation
-void buildStatus(char* buffer, size_t size, const AppState& state) {
-  snprintf(buffer, size, "Mode:%d Temp:%d WiFi:%s", 
-           state.mode, state.temperature, state.connected ? "ON" : "OFF");
-}
-
-// Avoid - multiple allocations
-String buildStatus(const AppState& state) {
-  String result = "Mode:";
-  result += state.mode;      // allocation
-  result += " Temp:";        // allocation
-  result += state.temperature; // allocation
-  // ... more allocations
-  return result;
-}
-```
-
-## Testing
-
-### Test Your Reducer
-
-```cpp
-void testWiFiConnection() {
-  AppState state;
-  state.mode = MODE_CONNECTING;
-  
-  Action action = Action::wifiConnected();
-  AppState result = reduce(state, action);
-  
-  if (result.mode == MODE_CONNECTED) {
-    Serial.println("✓ WiFi connection test passed");
-  } else {
-    Serial.println("✗ Test failed");
-  }
-}
-
-void runTests() {
-  Serial.println("Running tests...");
-  testWiFiConnection();
-  // more tests...
-  Serial.println("Tests complete");
-}
-```
-
-### Debug State
-
-```cpp
-void printState(const AppState& state) {
-  Serial.println("=== State ===");
-  Serial.print("Mode: "); Serial.println(state.mode);
-  Serial.print("Connected: "); Serial.println(state.connected);
-  Serial.print("Error: "); Serial.println(state.error);
-  Serial.println("============");
-}
-
-// Use when debugging
-#if DEBUG_ENABLED
-  if (some_condition) {
-    printState(g_state);
-  }
-#endif
 ```
 
 ## Common Mistakes
 
-### Side Effects in Reducers
+### 1. Impure Transition Functions
 
 ```cpp
-// DON'T do this
-AppState reduce(const AppState& state, const Action& action) {
-  AppState newState = state;
-  
-  if (action.type == BUTTON_PRESSED) {
-    digitalWrite(LED_PIN, HIGH);  // Side effect! Wrong!
-    Serial.println("Button pressed");  // Side effect! Wrong!
-    newState.ledOn = true;
+// Bad - side effects in transition function
+AppState badTransition(const AppState& state, const Input& input) {
+  if (input.type == INPUT_BUTTON_PRESS) {
+    digitalWrite(LED_PIN, HIGH);      // Side effect!
+    Serial.println("Button pressed"); // Side effect!
   }
-  
-  return newState;
+  return state;
 }
 
-// DO this instead
-void handleSideEffects(const AppState& oldState, const AppState& newState) {
-  if (newState.ledOn != oldState.ledOn) {
-    digitalWrite(LED_PIN, newState.ledOn ? HIGH : LOW);
-    Serial.println(newState.ledOn ? "LED on" : "LED off");
-  }
-}
-```
-
-### Missing Default Cases
-
-```cpp
-// Always handle the default case
-AppState reduce(const AppState& state, const Action& action) {
+// Good - pure transition function
+AppState goodTransition(const AppState& state, const Input& input) {
   AppState newState = state;
-  
-  switch (action.type) {
-    case ACTION_BUTTON:
-      newState.buttonPressed = true;
-      break;
-    default:
-      // Explicitly do nothing
-      break;
+  if (input.type == INPUT_BUTTON_PRESS) {
+    newState.mode = MODE_WORKING;     // Only state changes
   }
-  
   return newState;
 }
 ```
 
-### Blocking Operations
+### 2. Non-Deterministic Behavior
 
 ```cpp
-// DON'T block the main loop
-void loop() {
-  if (needsUserInput) {
-    String input = getSerialInput();  // This might wait forever!
+// Bad - non-deterministic
+AppState badTransition(const AppState& state, const Input& input) {
+  AppState newState = state;
+  if (input.type == INPUT_BUTTON_PRESS) {
+    // Random behavior!
+    if (random(2) == 0) {
+      newState.mode = MODE_WORKING;
+    } else {
+      newState.mode = MODE_ERROR;
+    }
   }
-  // ... rest of loop can't run
+  return newState;
 }
 
-// DO use state machines instead
-enum InputState {
-  INPUT_NONE,
-  INPUT_WAITING,
-  INPUT_READY
+// Good - deterministic
+AppState goodTransition(const AppState& state, const Input& input) {
+  AppState newState = state;
+  if (input.type == INPUT_BUTTON_PRESS) {
+    newState.mode = MODE_WORKING;  // Always same result
+  }
+  return newState;
+}
+```
+
+### 3. Unbounded State Growth
+
+```cpp
+// Bad - unbounded counter
+struct BadState {
+  int counter;  // Can grow forever
 };
 
-// Check for input without blocking
-Action readEvents() {
-  if (Serial.available()) {
-    String input = Serial.readStringUntil('\n');
-    return Action::inputReceived(input);
+// Good - bounded state
+struct GoodState {
+  uint8_t counter;  // 0-255, bounded
+  static const uint8_t MAX_COUNT = 100;
+  
+  void incrementCounter() {
+    if (counter < MAX_COUNT) {
+      counter++;
+    }
   }
-  return Action::tick();
+};
+```
+
+## Testing Strategies
+
+### Unit Test Transition Functions
+
+```cpp
+void testBasicTransitions() {
+  AppState idle = { MODE_IDLE, 0, 0 };
+  
+  // Test valid transition
+  Input buttonPress = Input::buttonPress(1);
+  AppState working = transitionFunction(idle, buttonPress);
+  assert(working.mode == MODE_WORKING);
+  
+  // Test invalid input ignored
+  Input invalidInput = Input::sensorReading(100);
+  AppState unchanged = transitionFunction(idle, invalidInput);
+  assert(unchanged.mode == MODE_IDLE);
+  
+  Serial.println("✓ Basic transitions work");
 }
 ```
 
-This stuff gets easier with practice. Start simple and add complexity bit by bit.
+### State Invariant Validation
+
+```cpp
+AppState transitionFunction(const AppState& state, const Input& input) {
+  // Validate input state
+  assert(state.mode < MODE_COUNT);
+  assert(state.counter <= MAX_COUNTER);
+  
+  AppState newState = /* ... transition logic ... */;
+  
+  // Validate output state
+  assert(newState.mode < MODE_COUNT);
+  assert(newState.counter <= MAX_COUNTER);
+  
+  return newState;
+}
+```
+
+These patterns help you build robust, maintainable Moore machines while avoiding common pitfalls in embedded development.

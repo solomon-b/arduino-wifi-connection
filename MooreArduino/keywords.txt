@@ -1,0 +1,61 @@
+#######################################
+# MooreArduino Library Keywords
+# Moore Machine Implementation
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+MooreMachine	KEYWORD1
+Timer	KEYWORD1
+Button	KEYWORD1
+AsyncOp	KEYWORD1
+MooreArduino	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+# MooreMachine methods
+step	KEYWORD2
+getState	KEYWORD2
+addStateObserver	KEYWORD2
+removeStateObserver	KEYWORD2
+setOutputFunction	KEYWORD2
+getObserverCount	KEYWORD2
+
+# Timer methods
+start	KEYWORD2
+stop	KEYWORD2
+restart	KEYWORD2
+expired	KEYWORD2
+setInterval	KEYWORD2
+getInterval	KEYWORD2
+isRunning	KEYWORD2
+remainingTime	KEYWORD2
+
+# Button methods
+wasPressed	KEYWORD2
+isPressed	KEYWORD2
+update	KEYWORD2
+setDebounceDelay	KEYWORD2
+getDebounceDelay	KEYWORD2
+getPin	KEYWORD2
+
+# AsyncOp methods
+finish	KEYWORD2
+timedOut	KEYWORD2
+isActive	KEYWORD2
+elapsedTime	KEYWORD2
+getTimeout	KEYWORD2
+getProgress	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+
+DEFAULT_DEBOUNCE_DELAY	LITERAL1
+MOORE_ARDUINO_VERSION_MAJOR	LITERAL1
+MOORE_ARDUINO_VERSION_MINOR	LITERAL1
+MOORE_ARDUINO_VERSION_PATCH	LITERAL1

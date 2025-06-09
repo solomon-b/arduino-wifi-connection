@@ -40,12 +40,12 @@
 
         packages = rec {
           build = pkgs.writeShellScriptBin "build" ''
-            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga .
+            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga --libraries . examples/WiFiManager
           '';
 
           load = pkgs.writeShellScriptBin "load" ''
-            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga .
-            ${arduino-cli}/bin/arduino-cli upload --port /dev/ttyACM0 --fqbn arduino:mbed_giga:giga .
+            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga --libraries . examples/WiFiManager
+            ${arduino-cli}/bin/arduino-cli upload --port /dev/ttyACM0 --fqbn arduino:mbed_giga:giga examples/WiFiManager
           '';
 
           monitor = pkgs.writeShellScriptBin "monitor" ''

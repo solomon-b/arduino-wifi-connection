@@ -1,157 +1,159 @@
-# Real-World Examples
+# Moore Machine Examples for Arduino
 
-Practical Redux patterns for common Arduino projects.
+Practical Moore machine patterns for common Arduino projects. Each example demonstrates proper separation of state space Q, input alphabet Σ, transition function δ, and output function λ.
 
 ## Example 1: Smart LED Controller
 
-Multiple modes, brightness control, and WiFi commands.
+A multi-mode LED controller demonstrating hierarchical state machines.
 
-### The State
+### State Space Q
 
-What does this thing need to remember?
+Define finite states for LED patterns and control modes:
 
 ```cpp
-enum LedPattern {
-  PATTERN_OFF,
-  PATTERN_SOLID,
-  PATTERN_BLINK,
-  PATTERN_FADE
+enum LEDPattern {
+  LED_OFF,
+  LED_SOLID,
+  LED_BLINK_SLOW,
+  LED_BLINK_FAST,
+  LED_FADE,
+  LED_PATTERN_COUNT
 };
 
 enum ControlMode {
-  MODE_BUTTONS,    // Physical buttons
-  MODE_WIFI,       // WiFi commands
-  MODE_AUTO        // Light sensor
+  CONTROL_MANUAL,      // Button control
+  CONTROL_WIFI,        // Network commands
+  CONTROL_AUTO,        // Light sensor
+  CONTROL_MODE_COUNT
 };
 
-struct LedState {
-  LedPattern pattern;
+struct LEDState {
+  LEDPattern pattern;
   ControlMode mode;
-  int brightness;      // 0-255
-  int speed;          // 1-10
-  bool isOn;
-  int lightSensor;    // Raw sensor value
-  unsigned long lastPatternUpdate;
+  uint8_t brightness;        // 0-255
+  unsigned long patternStart;
+  bool sensorEnabled;
   
-  // Reasonable defaults
-  LedState() : pattern(PATTERN_OFF), mode(MODE_BUTTONS), brightness(128), 
-               speed(5), isOn(false), lightSensor(0), lastPatternUpdate(0) {}
+  LEDState() : pattern(LED_OFF), mode(CONTROL_MANUAL), 
+               brightness(128), patternStart(0), sensorEnabled(false) {}
 };
 ```
 
-### The Actions
+### Input Alphabet Σ
+
+All possible events in the system:
 
 ```cpp
-enum LedActionType {
-  ACTION_POWER_TOGGLE,
-  ACTION_NEXT_PATTERN,
-  ACTION_BRIGHTER,
-  ACTION_DIMMER,
-  ACTION_SPEED_UP,
-  ACTION_SPEED_DOWN,
-  ACTION_CHANGE_MODE,
-  ACTION_SENSOR_READ,
-  ACTION_WIFI_COMMAND,
-  ACTION_TICK
+enum InputType {
+  INPUT_NONE,
+  INPUT_BUTTON_MODE,      // Mode button pressed
+  INPUT_BUTTON_PATTERN,   // Pattern button pressed  
+  INPUT_BUTTON_BRIGHT_UP,
+  INPUT_BUTTON_BRIGHT_DOWN,
+  INPUT_WIFI_COMMAND,     // Network command received
+  INPUT_SENSOR_READING,   // Light sensor data
+  INPUT_TIMER_TICK,
+  INPUT_COUNT
 };
 
-struct LedAction {
-  LedActionType type;
-  int value;
-  ControlMode newMode;
-  String command;
+struct Input {
+  InputType type;
   
-  static LedAction powerToggle() {
-    LedAction a;
-    a.type = ACTION_POWER_TOGGLE;
-    return a;
+  union {
+    struct {
+      char command[16];
+      int value;
+    } wifi;
+    int sensorValue;
+    int brightness;
+  };
+  
+  Input() : type(INPUT_NONE) {}
+  
+  static Input buttonMode() {
+    Input i; i.type = INPUT_BUTTON_MODE; return i;
   }
   
-  static LedAction brighter() {
-    LedAction a;
-    a.type = ACTION_BRIGHTER;
-    return a;
+  static Input wifiCommand(const char* cmd, int val) {
+    Input i; 
+    i.type = INPUT_WIFI_COMMAND;
+    strncpy(i.wifi.command, cmd, 15);
+    i.wifi.value = val;
+    return i;
   }
   
-  static LedAction sensorRead(int value) {
-    LedAction a;
-    a.type = ACTION_SENSOR_READ;
-    a.value = value;
-    return a;
+  static Input sensorReading(int value) {
+    Input i; i.type = INPUT_SENSOR_READING; i.sensorValue = value; return i;
   }
-  
-  static LedAction wifiCommand(const String& cmd) {
-    LedAction a;
-    a.type = ACTION_WIFI_COMMAND;
-    a.command = cmd;
-    return a;
-  }
-  
-  // ... more factory methods
 };
 ```
 
-### The Reducer
+### Transition Function δ: Q × Σ → Q
+
+Pure state transitions with no side effects:
 
 ```cpp
-LedState reduce(const LedState& state, const LedAction& action) {
-  LedState newState = state;
+LEDState transitionFunction(const LEDState& state, const Input& input) {
+  LEDState newState = state;
   
-  switch (action.type) {
-    case ACTION_POWER_TOGGLE:
-      newState.isOn = !state.isOn;
-      if (!newState.isOn) {
-        newState.pattern = PATTERN_OFF;
+  switch (input.type) {
+    case INPUT_BUTTON_MODE:
+      // Cycle through control modes
+      newState.mode = (ControlMode)((state.mode + 1) % CONTROL_MODE_COUNT);
+      break;
+      
+    case INPUT_BUTTON_PATTERN:
+      if (state.mode == CONTROL_MANUAL) {
+        // Cycle LED patterns
+        newState.pattern = (LEDPattern)((state.pattern + 1) % LED_PATTERN_COUNT);
+        newState.patternStart = millis();
       }
       break;
       
-    case ACTION_NEXT_PATTERN:
-      if (state.isOn) {
-        int next = (state.pattern + 1) % 4;
-        newState.pattern = (LedPattern)next;
-      }
-      break;
-      
-    case ACTION_BRIGHTER:
-      if (state.isOn) {
+    case INPUT_BUTTON_BRIGHT_UP:
+      if (state.mode == CONTROL_MANUAL) {
         newState.brightness = min(255, state.brightness + 25);
       }
       break;
       
-    case ACTION_DIMMER:
-      if (state.isOn) {
-        newState.brightness = max(10, state.brightness - 25);
+    case INPUT_BUTTON_BRIGHT_DOWN:
+      if (state.mode == CONTROL_MANUAL) {
+        newState.brightness = max(0, state.brightness - 25);
       }
       break;
       
-    case ACTION_SENSOR_READ:
-      newState.lightSensor = action.value;
-      // Auto mode: dimmer when it's bright outside
-      if (state.mode == MODE_AUTO && state.isOn) {
-        newState.brightness = map(action.value, 0, 1023, 255, 50);
+    case INPUT_WIFI_COMMAND:
+      if (state.mode == CONTROL_WIFI) {
+        if (strcmp(input.wifi.command, "pattern") == 0) {
+          if (input.wifi.value < LED_PATTERN_COUNT) {
+            newState.pattern = (LEDPattern)input.wifi.value;
+            newState.patternStart = millis();
+          }
+        } else if (strcmp(input.wifi.command, "brightness") == 0) {
+          newState.brightness = constrain(input.wifi.value, 0, 255);
+        }
       }
       break;
       
-    case ACTION_WIFI_COMMAND:
-      // Handle commands like "ON", "OFF", "BRIGHTNESS 200", "PATTERN FADE"
-      if (action.command == "ON") {
-        newState.isOn = true;
-        newState.pattern = PATTERN_SOLID;
-      } else if (action.command == "OFF") {
-        newState.isOn = false;
-        newState.pattern = PATTERN_OFF;
-      } else if (action.command.startsWith("BRIGHTNESS ")) {
-        int value = action.command.substring(11).toInt();
-        newState.brightness = constrain(value, 0, 255);
+    case INPUT_SENSOR_READING:
+      if (state.mode == CONTROL_AUTO) {
+        // Auto-adjust brightness based on ambient light
+        int targetBrightness = map(input.sensorValue, 0, 1023, 255, 50);
+        newState.brightness = targetBrightness;
+        
+        // Auto pattern selection
+        if (input.sensorValue < 100) {
+          newState.pattern = LED_SOLID;  // Dark = solid
+        } else if (input.sensorValue < 500) {
+          newState.pattern = LED_BLINK_SLOW;  // Medium = slow blink
+        } else {
+          newState.pattern = LED_OFF;  // Bright = off
+        }
       }
       break;
       
-    case ACTION_TICK:
-      // Update pattern timing
-      if (state.isOn && state.pattern != PATTERN_OFF && 
-          millis() - state.lastPatternUpdate > (1100 - state.speed * 100)) {
-        newState.lastPatternUpdate = millis();
-      }
+    case INPUT_TIMER_TICK:
+      // No state changes on tick - just for timing
       break;
   }
   
@@ -159,424 +161,394 @@ LedState reduce(const LedState& state, const LedAction& action) {
 }
 ```
 
-### Hardware Updates
+### Output Function λ: Q → Γ
+
+Handle all I/O based on current state (Moore property):
 
 ```cpp
-void updateLED(const LedState& oldState, const LedState& newState) {
-  // Only update when something actually changed
-  if (newState.pattern != oldState.pattern || 
-      newState.brightness != oldState.brightness ||
-      newState.lastPatternUpdate != oldState.lastPatternUpdate) {
-    
-    int ledValue = 0;
-    
-    switch (newState.pattern) {
-      case PATTERN_OFF:
-        ledValue = 0;
-        break;
-      case PATTERN_SOLID:
-        ledValue = newState.brightness;
-        break;
-      case PATTERN_BLINK:
-        ledValue = (millis() / 500) % 2 ? newState.brightness : 0;
-        break;
-      case PATTERN_FADE:
-        float fadePhase = (millis() % 2000) / 2000.0;
-        ledValue = (sin(fadePhase * PI) * newState.brightness);
-        break;
-    }
-    
-    analogWrite(LED_PIN, ledValue);
+Input outputFunction(const LEDState& oldState, const LEDState& newState) {
+  const int LED_PIN = 9;  // PWM pin
+  
+  // Calculate LED output based on current state
+  int ledValue = 0;
+  unsigned long elapsed = millis() - newState.patternStart;
+  
+  switch (newState.pattern) {
+    case LED_OFF:
+      ledValue = 0;
+      break;
+      
+    case LED_SOLID:
+      ledValue = newState.brightness;
+      break;
+      
+    case LED_BLINK_SLOW:
+      ledValue = (elapsed / 1000) % 2 ? newState.brightness : 0;
+      break;
+      
+    case LED_BLINK_FAST:
+      ledValue = (elapsed / 200) % 2 ? newState.brightness : 0;
+      break;
+      
+    case LED_FADE:
+      // Sine wave fade
+      float phase = (elapsed % 3000) / 3000.0 * 2 * PI;
+      ledValue = (sin(phase) + 1) * newState.brightness / 2;
+      break;
   }
+  
+  analogWrite(LED_PIN, ledValue);
+  
+  // Status output when mode changes
+  if (oldState.mode != newState.mode) {
+    Serial.print("Control mode: ");
+    switch (newState.mode) {
+      case CONTROL_MANUAL: Serial.println("MANUAL"); break;
+      case CONTROL_WIFI: Serial.println("WIFI"); break;
+      case CONTROL_AUTO: Serial.println("AUTO"); break;
+    }
+  }
+  
+  return Input::none();
 }
 ```
 
-### Reading Events
+### Complete System Setup
 
 ```cpp
-LedAction readLedEvents() {
-  // Button inputs
-  static Button powerBtn(2);
-  static Button patternBtn(3);
-  static Button brighterBtn(4);
-  static Button dimmerBtn(5);
+#include <MooreArduino.h>
+using namespace MooreArduino;
+
+MooreMachine<LEDState, Input> ledMachine(transitionFunction, LEDState());
+Timer sensorTimer(500);  // Read sensor every 500ms
+Button modeButton(2);
+Button patternButton(3);
+
+void setup() {
+  Serial.begin(115200);
   
-  if (powerBtn.wasPressed()) return LedAction::powerToggle();
-  if (patternBtn.wasPressed()) return LedAction::nextPattern();
-  if (brighterBtn.wasPressed()) return LedAction::brighter();
-  if (dimmerBtn.wasPressed()) return LedAction::dimmer();
+  ledMachine.setOutputFunction(outputFunction);
+  sensorTimer.start();
   
-  // Light sensor (every 500ms)
-  static unsigned long lastSensorRead = 0;
-  if (millis() - lastSensorRead > 500) {
-    lastSensorRead = millis();
-    int sensorValue = analogRead(A0);
-    return LedAction::sensorRead(sensorValue);
+  Serial.println("Smart LED Controller - Moore Machine");
+}
+
+void loop() {
+  Input input = Input::none();
+  
+  if (modeButton.wasPressed()) {
+    input = Input::buttonMode();
+  } else if (patternButton.wasPressed()) {
+    input = Input::buttonPattern();
+  } else if (sensorTimer.expired()) {
+    sensorTimer.restart();
+    input = Input::sensorReading(analogRead(A0));
   }
   
-  // WiFi commands
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    cmd.trim();
-    return LedAction::wifiCommand(cmd);
+  if (input.type != INPUT_NONE) {
+    ledMachine.step(input);
   }
   
-  return LedAction::tick();
+  delay(10);
 }
 ```
 
 ## Example 2: Temperature Monitor
 
-Track temperature, log data, send alerts.
+Environmental monitoring with alarms and data logging.
 
-### State Design
+### State Space Q
 
 ```cpp
-struct TempReading {
+enum MonitorMode {
+  MONITOR_IDLE,
+  MONITOR_SAMPLING,
+  MONITOR_ALARM_HIGH,
+  MONITOR_ALARM_LOW,
+  MONITOR_CALIBRATING,
+  MONITOR_MODE_COUNT
+};
+
+struct TempState {
+  MonitorMode mode;
+  float currentTemp;
+  float highThreshold;
+  float lowThreshold;
+  unsigned long lastSample;
+  int sampleCount;
+  bool alarmEnabled;
+  
+  TempState() : mode(MONITOR_IDLE), currentTemp(20.0), 
+                highThreshold(30.0), lowThreshold(10.0),
+                lastSample(0), sampleCount(0), alarmEnabled(true) {}
+};
+```
+
+### Input Alphabet Σ
+
+```cpp
+enum TempInputType {
+  TEMP_INPUT_NONE,
+  TEMP_INPUT_START_MONITORING,
+  TEMP_INPUT_STOP_MONITORING,
+  TEMP_INPUT_SENSOR_READING,
+  TEMP_INPUT_CALIBRATE,
+  TEMP_INPUT_SET_THRESHOLD,
+  TEMP_INPUT_ALARM_ACK,
+  TEMP_INPUT_TIMER_TICK
+};
+
+struct TempInput {
+  TempInputType type;
   float temperature;
-  unsigned long timestamp;
+  float threshold;
+  bool isHigh;  // true for high threshold, false for low
   
-  TempReading() : temperature(0), timestamp(0) {}
-  
-  bool isValid() {
-    return temperature > -40 && temperature < 80;
+  static TempInput sensorReading(float temp) {
+    TempInput i; i.type = TEMP_INPUT_SENSOR_READING; i.temperature = temp; return i;
   }
-};
-
-enum AlertLevel {
-  ALERT_NONE,
-  ALERT_WARM,
-  ALERT_HOT,
-  ALERT_COLD
-};
-
-struct MonitorState {
-  TempReading current;
-  TempReading history[24];  // Last 24 readings
-  int historyIndex;
-  float alertThresholds[3]; // cold, warm, hot
-  AlertLevel currentAlert;
-  bool alertMuted;
-  Timer readingTimer;
-  Timer logTimer;
   
-  MonitorState() : historyIndex(0), currentAlert(ALERT_NONE), alertMuted(false),
-                   readingTimer(5000), logTimer(3600000) {
-    // Default thresholds: 10°C cold, 25°C warm, 35°C hot
-    alertThresholds[0] = 10.0;
-    alertThresholds[1] = 25.0;
-    alertThresholds[2] = 35.0;
-    readingTimer.start();
-    logTimer.start();
+  static TempInput setThreshold(float thresh, bool high) {
+    TempInput i; i.type = TEMP_INPUT_SET_THRESHOLD; 
+    i.threshold = thresh; i.isHigh = high; return i;
   }
 };
 ```
 
-### Simple Actions
+### Transition Function δ
 
 ```cpp
-enum MonitorActionType {
-  ACTION_TEMP_READ,
-  ACTION_LOG_DATA,
-  ACTION_MUTE_ALERT,
-  ACTION_UNMUTE_ALERT,
-  ACTION_CHECK_ALERTS,
-  ACTION_TICK
-};
-
-struct MonitorAction {
-  MonitorActionType type;
-  float temperature;
+TempState tempTransition(const TempState& state, const TempInput& input) {
+  TempState newState = state;
   
-  static MonitorAction tempRead(float temp) {
-    MonitorAction a;
-    a.type = ACTION_TEMP_READ;
-    a.temperature = temp;
-    return a;
-  }
-  
-  static MonitorAction muteAlert() {
-    MonitorAction a;
-    a.type = ACTION_MUTE_ALERT;
-    return a;
-  }
-  
-  static MonitorAction tick() {
-    MonitorAction a;
-    a.type = ACTION_TICK;
-    return a;
-  }
-};
-```
-
-### Alert Logic
-
-```cpp
-AlertLevel checkAlertLevel(float temp, const float thresholds[]) {
-  if (temp < thresholds[0]) return ALERT_COLD;
-  if (temp > thresholds[2]) return ALERT_HOT;
-  if (temp > thresholds[1]) return ALERT_WARM;
-  return ALERT_NONE;
-}
-
-MonitorState reduce(const MonitorState& state, const MonitorAction& action) {
-  MonitorState newState = state;
-  
-  switch (action.type) {
-    case ACTION_TEMP_READ:
-      if (action.temperature > -40 && action.temperature < 80) {
-        newState.current.temperature = action.temperature;
-        newState.current.timestamp = millis();
+  switch (state.mode) {
+    case MONITOR_IDLE:
+      if (input.type == TEMP_INPUT_START_MONITORING) {
+        newState.mode = MONITOR_SAMPLING;
+        newState.sampleCount = 0;
+      } else if (input.type == TEMP_INPUT_CALIBRATE) {
+        newState.mode = MONITOR_CALIBRATING;
       }
       break;
       
-    case ACTION_LOG_DATA:
-      if (state.current.isValid()) {
-        newState.history[state.historyIndex] = state.current;
-        newState.historyIndex = (state.historyIndex + 1) % 24;
-        newState.logTimer.restart();
+    case MONITOR_SAMPLING:
+      if (input.type == TEMP_INPUT_STOP_MONITORING) {
+        newState.mode = MONITOR_IDLE;
+      } else if (input.type == TEMP_INPUT_SENSOR_READING) {
+        newState.currentTemp = input.temperature;
+        newState.lastSample = millis();
+        newState.sampleCount++;
+        
+        // Check thresholds
+        if (state.alarmEnabled) {
+          if (input.temperature > state.highThreshold) {
+            newState.mode = MONITOR_ALARM_HIGH;
+          } else if (input.temperature < state.lowThreshold) {
+            newState.mode = MONITOR_ALARM_LOW;
+          }
+        }
       }
       break;
       
-    case ACTION_CHECK_ALERTS:
-      if (state.current.isValid()) {
-        AlertLevel level = checkAlertLevel(state.current.temperature, state.alertThresholds);
-        newState.currentAlert = level;
+    case MONITOR_ALARM_HIGH:
+    case MONITOR_ALARM_LOW:
+      if (input.type == TEMP_INPUT_ALARM_ACK) {
+        newState.mode = MONITOR_SAMPLING;  // Return to sampling
+      } else if (input.type == TEMP_INPUT_SENSOR_READING) {
+        newState.currentTemp = input.temperature;
+        // Stay in alarm state until acknowledged
       }
       break;
       
-    case ACTION_MUTE_ALERT:
-      newState.alertMuted = true;
+    case MONITOR_CALIBRATING:
+      if (input.type == TEMP_INPUT_SENSOR_READING) {
+        // Simple calibration - could be more sophisticated
+        newState.currentTemp = input.temperature;
+        newState.mode = MONITOR_IDLE;  // Calibration complete
+      }
       break;
-      
-    case ACTION_UNMUTE_ALERT:
-      newState.alertMuted = false;
-      break;
-      
-    case ACTION_TICK:
-      // Timer management happens in side effects
-      break;
+  }
+  
+  // Global transitions
+  if (input.type == TEMP_INPUT_SET_THRESHOLD) {
+    if (input.isHigh) {
+      newState.highThreshold = input.threshold;
+    } else {
+      newState.lowThreshold = input.threshold;
+    }
   }
   
   return newState;
 }
 ```
 
-### Side Effects
+### Output Function λ
 
 ```cpp
-Action handleMonitorSideEffects(const MonitorState& oldState, const MonitorState& newState) {
-  // Sound alert when level changes (and not muted)
-  if (newState.currentAlert != oldState.currentAlert && !newState.alertMuted) {
-    if (newState.currentAlert != ALERT_NONE) {
-      digitalWrite(BUZZER_PIN, HIGH);
-      delay(100);
-      digitalWrite(BUZZER_PIN, LOW);
-    }
+TempInput tempOutputFunction(const TempState& oldState, const TempState& newState) {
+  const int ALARM_LED = 4;
+  const int STATUS_LED = 5;
+  
+  // Moore property: outputs depend only on current state
+  switch (newState.mode) {
+    case MONITOR_IDLE:
+      digitalWrite(STATUS_LED, LOW);
+      digitalWrite(ALARM_LED, LOW);
+      break;
+      
+    case MONITOR_SAMPLING:
+      digitalWrite(STATUS_LED, HIGH);
+      digitalWrite(ALARM_LED, LOW);
+      break;
+      
+    case MONITOR_ALARM_HIGH:
+    case MONITOR_ALARM_LOW:
+      digitalWrite(STATUS_LED, HIGH);
+      digitalWrite(ALARM_LED, (millis() / 250) % 2);  // Blink alarm
+      break;
+      
+    case MONITOR_CALIBRATING:
+      digitalWrite(STATUS_LED, (millis() / 100) % 2);  // Fast blink
+      digitalWrite(ALARM_LED, LOW);
+      break;
   }
   
-  // Update display when temperature changes
-  if (newState.current.temperature != oldState.current.temperature) {
-    Serial.print("Temperature: ");
-    Serial.print(newState.current.temperature);
-    Serial.print("°C ");
+  // State entry actions
+  if (oldState.mode != newState.mode) {
+    Serial.print("Monitor mode: ");
+    Serial.println(newState.mode);
     
-    switch (newState.currentAlert) {
-      case ALERT_COLD: Serial.println("(COLD)"); break;
-      case ALERT_WARM: Serial.println("(WARM)"); break;
-      case ALERT_HOT: Serial.println("(HOT!)"); break;
-      default: Serial.println("(OK)"); break;
+    if (newState.mode == MONITOR_ALARM_HIGH) {
+      Serial.print("HIGH TEMP ALARM: ");
+      Serial.println(newState.currentTemp);
+    } else if (newState.mode == MONITOR_ALARM_LOW) {
+      Serial.print("LOW TEMP ALARM: ");
+      Serial.println(newState.currentTemp);
     }
   }
   
-  // Check timers
-  if (newState.readingTimer.expired()) {
-    return MonitorAction::tempRead(readTemperatureSensor());
+  // Log temperature readings
+  if (newState.mode == MONITOR_SAMPLING && 
+      newState.sampleCount != oldState.sampleCount) {
+    Serial.print("Temp: ");
+    Serial.print(newState.currentTemp);
+    Serial.print("°C (Sample #");
+    Serial.print(newState.sampleCount);
+    Serial.println(")");
   }
   
-  if (newState.logTimer.expired()) {
-    return MonitorAction::logData();
-  }
-  
-  return MonitorAction::tick();
+  return TempInput::none();
 }
 ```
 
 ## Example 3: Garden Watering System
 
-Multiple zones, soil sensors, weather data, manual override.
+Automated irrigation with moisture sensors and scheduling.
 
-### Complex State
+### State Space Q
 
 ```cpp
-struct Zone {
-  int soilMoisture;      // 0-100%
-  int threshold;         // Water when below this
-  bool isWatering;
-  unsigned long waterStart;
-  unsigned long maxWaterTime;  // Safety limit
+enum WaterMode {
+  WATER_IDLE,
+  WATER_SENSING,
+  WATER_WATERING,
+  WATER_SCHEDULED,
+  WATER_MANUAL,
+  WATER_ERROR,
+  WATER_MODE_COUNT
+};
+
+struct WaterState {
+  WaterMode mode;
+  int moistureLevel;      // 0-1023
+  int targetMoisture;     // Desired moisture level
+  unsigned long waterStartTime;
+  unsigned long waterDuration;
+  unsigned long nextSchedule;
+  bool valveOpen;
+  int errorCode;
   
-  Zone() : soilMoisture(50), threshold(30), isWatering(false), 
-           waterStart(0), maxWaterTime(300000) {}  // 5 min max
-};
-
-enum WeatherType {
-  WEATHER_UNKNOWN,
-  WEATHER_SUNNY,
-  WEATHER_CLOUDY,
-  WEATHER_RAINY
-};
-
-enum WateringMode {
-  MODE_OFF,
-  MODE_AUTO,
-  MODE_MANUAL,
-  MODE_SCHEDULE
-};
-
-struct GardenState {
-  Zone zones[4];
-  WateringMode mode;
-  WeatherType weather;
-  int lightLevel;        // 0-100%
-  bool manualOverride;
-  unsigned long dailyWaterUsed;  // ml
-  Timer sensorTimer;
-  Timer scheduleTimer;
-  
-  GardenState() : mode(MODE_AUTO), weather(WEATHER_UNKNOWN), lightLevel(50),
-                  manualOverride(false), dailyWaterUsed(0),
-                  sensorTimer(30000), scheduleTimer(3600000) {
-    sensorTimer.start();
-    scheduleTimer.start();
-  }
+  WaterState() : mode(WATER_IDLE), moistureLevel(500), targetMoisture(600),
+                 waterStartTime(0), waterDuration(30000), // 30 seconds
+                 nextSchedule(0), valveOpen(false), errorCode(0) {}
 };
 ```
 
-### Garden Actions
+### Advanced State Machine Features
 
 ```cpp
-enum GardenActionType {
-  ACTION_SENSOR_UPDATE,
-  ACTION_WEATHER_UPDATE,
-  ACTION_START_WATERING,
-  ACTION_STOP_WATERING,
-  ACTION_MANUAL_WATER,
-  ACTION_SAFETY_CHECK,
-  ACTION_MODE_CHANGE,
-  ACTION_SCHEDULE_CHECK
-};
-
-struct GardenAction {
-  GardenActionType type;
-  int zoneId;
-  int value;
-  WateringMode newMode;
-  WeatherType newWeather;
+WaterState waterTransition(const WaterState& state, const WaterInput& input) {
+  WaterState newState = state;
   
-  static GardenAction sensorUpdate(int zone, int moisture) {
-    GardenAction a;
-    a.type = ACTION_SENSOR_UPDATE;
-    a.zoneId = zone;
-    a.value = moisture;
-    return a;
-  }
-  
-  static GardenAction startWatering(int zone) {
-    GardenAction a;
-    a.type = ACTION_START_WATERING;
-    a.zoneId = zone;
-    return a;
-  }
-  
-  static GardenAction manualWater(int zone) {
-    GardenAction a;
-    a.type = ACTION_MANUAL_WATER;
-    a.zoneId = zone;
-    return a;
-  }
-};
-```
-
-### Business Logic
-
-```cpp
-bool shouldWater(const Zone& zone, WeatherType weather, int lightLevel) {
-  // Don't water if it's raining
-  if (weather == WEATHER_RAINY) return false;
-  
-  // Don't water at night (too dark)
-  if (lightLevel < 20) return false;
-  
-  // Don't water if already watering
-  if (zone.isWatering) return false;
-  
-  // Water if soil is dry
-  return zone.soilMoisture < zone.threshold;
-}
-
-GardenState reduce(const GardenState& state, const GardenAction& action) {
-  GardenState newState = state;
-  
-  switch (action.type) {
-    case ACTION_SENSOR_UPDATE:
-      if (action.zoneId >= 0 && action.zoneId < 4) {
-        newState.zones[action.zoneId].soilMoisture = action.value;
+  switch (state.mode) {
+    case WATER_IDLE:
+      if (input.type == WATER_INPUT_START_AUTO) {
+        newState.mode = WATER_SENSING;
+      } else if (input.type == WATER_INPUT_MANUAL_ON) {
+        newState.mode = WATER_MANUAL;
+        newState.waterStartTime = millis();
+      } else if (input.type == WATER_INPUT_SCHEDULE) {
+        newState.mode = WATER_SCHEDULED;
+        newState.nextSchedule = millis() + input.scheduleDelay;
       }
       break;
       
-    case ACTION_WEATHER_UPDATE:
-      newState.weather = action.newWeather;
+    case WATER_SENSING:
+      if (input.type == WATER_INPUT_MOISTURE_READING) {
+        newState.moistureLevel = input.moistureValue;
+        
+        if (input.moistureValue < state.targetMoisture) {
+          newState.mode = WATER_WATERING;
+          newState.waterStartTime = millis();
+          newState.valveOpen = true;
+        }
+      } else if (input.type == WATER_INPUT_STOP) {
+        newState.mode = WATER_IDLE;
+      }
       break;
       
-    case ACTION_START_WATERING:
-      if (action.zoneId >= 0 && action.zoneId < 4) {
-        Zone& zone = newState.zones[action.zoneId];
-        if (shouldWater(zone, state.weather, state.lightLevel)) {
-          zone.isWatering = true;
-          zone.waterStart = millis();
+    case WATER_WATERING:
+      if (input.type == WATER_INPUT_TIMER_TICK) {
+        unsigned long elapsed = millis() - state.waterStartTime;
+        if (elapsed > state.waterDuration) {
+          newState.mode = WATER_SENSING;  // Return to sensing
+          newState.valveOpen = false;
+        }
+      } else if (input.type == WATER_INPUT_STOP) {
+        newState.mode = WATER_IDLE;
+        newState.valveOpen = false;
+      }
+      break;
+      
+    case WATER_SCHEDULED:
+      if (input.type == WATER_INPUT_TIMER_TICK) {
+        if (millis() >= state.nextSchedule) {
+          newState.mode = WATER_SENSING;
         }
       }
       break;
       
-    case ACTION_STOP_WATERING:
-      if (action.zoneId >= 0 && action.zoneId < 4) {
-        Zone& zone = newState.zones[action.zoneId];
-        if (zone.isWatering) {
-          zone.isWatering = false;
-          // Track water usage (rough estimate)
-          unsigned long duration = millis() - zone.waterStart;
-          newState.dailyWaterUsed += duration / 1000;  // 1ml per second
+    case WATER_MANUAL:
+      if (input.type == WATER_INPUT_MANUAL_OFF || 
+          input.type == WATER_INPUT_STOP) {
+        newState.mode = WATER_IDLE;
+        newState.valveOpen = false;
+      } else if (input.type == WATER_INPUT_TIMER_TICK) {
+        // Safety timeout for manual mode
+        unsigned long elapsed = millis() - state.waterStartTime;
+        if (elapsed > 300000) {  // 5 minute safety limit
+          newState.mode = WATER_ERROR;
+          newState.errorCode = 1;  // Manual timeout
+          newState.valveOpen = false;
         }
       }
       break;
       
-    case ACTION_MANUAL_WATER:
-      newState.manualOverride = true;
-      if (action.zoneId >= 0 && action.zoneId < 4) {
-        Zone& zone = newState.zones[action.zoneId];
-        if (zone.isWatering) {
-          zone.isWatering = false;
-        } else {
-          zone.isWatering = true;
-          zone.waterStart = millis();
-        }
+    case WATER_ERROR:
+      if (input.type == WATER_INPUT_RESET) {
+        newState.mode = WATER_IDLE;
+        newState.errorCode = 0;
       }
-      break;
-      
-    case ACTION_SAFETY_CHECK:
-      // Stop any watering that's gone too long
-      for (int i = 0; i < 4; i++) {
-        Zone& zone = newState.zones[i];
-        if (zone.isWatering && millis() - zone.waterStart > zone.maxWaterTime) {
-          zone.isWatering = false;
-        }
-      }
-      break;
-      
-    case ACTION_MODE_CHANGE:
-      newState.mode = action.newMode;
-      newState.manualOverride = false;
       break;
   }
   
@@ -584,47 +556,30 @@ GardenState reduce(const GardenState& state, const GardenAction& action) {
 }
 ```
 
-### Hardware Control
+## Common Patterns Summary
 
-```cpp
-void updateWateringHardware(const GardenState& oldState, const GardenState& newState) {
-  for (int i = 0; i < 4; i++) {
-    if (newState.zones[i].isWatering != oldState.zones[i].isWatering) {
-      digitalWrite(VALVE_PINS[i], newState.zones[i].isWatering ? HIGH : LOW);
-      
-      if (newState.zones[i].isWatering) {
-        Serial.print("Started watering zone ");
-        Serial.println(i);
-      } else {
-        Serial.print("Stopped watering zone ");
-        Serial.println(i);
-      }
-    }
-  }
-}
-```
+### 1. Hierarchical States
+Break complex systems into subsystems with their own state machines.
 
-## Key Lessons
+### 2. Timeout Handling
+Use timer inputs and state entry times for automatic transitions.
 
-### Start Simple
-Don't try to build everything at once. Start with basic on/off, then add features.
+### 3. Error Recovery
+Design explicit error states with recovery mechanisms.
 
-### Model the Real World
-Your state should reflect what's actually happening in the physical world.
+### 4. Safety Limits
+Implement bounds checking and safety timeouts.
 
-### Safety First
-Always have timeouts and limits. Hardware can fail.
+### 5. Mode Switching
+Allow systems to operate in different modes with different behaviors.
 
-### Test Small Parts
-Test your reducer functions separately before hooking up hardware.
+### 6. Scheduled Operations
+Use absolute timestamps for scheduling future events.
 
-### Use Good Names
-`ACTION_EMERGENCY_STOP` is better than `ACTION_BUTTON_1`.
+### 7. Sensor Integration
+Process sensor readings as inputs to drive state transitions.
 
-### Handle Errors
-What happens when sensors fail? Network drops? Plan for it.
+### 8. User Interface
+Map physical buttons and commands to input symbols.
 
-### Keep It Debuggable
-Print state changes. Log important events. You'll thank yourself later.
-
-These examples show real patterns you'll use. Start with the LED controller - it's simple but covers the basics. Then move on to more complex stuff as you get comfortable.
+These examples demonstrate how Moore machines provide structure and predictability to embedded systems while maintaining the mathematical properties that make them reliable and testable.

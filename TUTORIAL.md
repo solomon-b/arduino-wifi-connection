@@ -1,16 +1,16 @@
-# Redux-Style State Management for Arduino
+# Moore Machine Programming for Arduino
 
 ## What This Is
 
-This tutorial shows you how to write Arduino code that doesn't turn into a mess as it gets bigger. Instead of global variables scattered everywhere and spaghetti code, you keep all your state in one place and change it in predictable ways.
+This tutorial shows you how to write Arduino code using Moore finite state machines - a mathematical model that makes embedded systems predictable and maintainable. Instead of global variables scattered everywhere and spaghetti code, you model your system as a formal state machine.
 
-It's based on Redux (from JavaScript) and the Elm architecture. If you've used React with Redux, this will look familiar.
+A Moore machine is defined as M = (Q, Σ, δ, λ, q₀) where outputs depend only on the current state, making behavior completely predictable.
 
 ## What This Is NOT
 
-This is **not** Functional Reactive Programming (FRP). Real FRP has continuous streams and automatic dependency tracking. This is simpler - just good state management.
+This is **not** Functional Reactive Programming (FRP). Real FRP has continuous streams and behaviors. This is also **not** Redux (though Redux is actually a Moore machine implementation). This is the underlying computational model that makes those patterns work.
 
-## Why Bother?
+## Why Moore Machines?
 
 Arduino code usually starts simple but gets messy fast:
 
@@ -24,447 +24,488 @@ bool connecting = false;
 // ... and it keeps growing
 ```
 
-With Redux patterns, you get:
-- One place where all state lives
-- Predictable ways to change state
-- Easy debugging
-- Code that stays readable
+With Moore machines, you get:
+- **Predictable behavior**: Output depends only on current state
+- **Deterministic transitions**: Same input + state = same result  
+- **Mathematical foundation**: Formal model with proven properties
+- **Easy testing**: Pure functions with no hidden dependencies
+- **Clear separation**: Logic (δ) vs I/O (λ) vs state (Q)
 
-## The Big Idea
+## The Mathematical Model
 
-Everything flows in one direction:
+A Moore machine processes inputs through deterministic state transitions:
 
 ```
-User presses button → Action → Update state → Update LEDs/screen
-Timer expires     → Action → Update state → Check sensors
-WiFi connects     → Action → Update state → Show status
+Input → δ(currentState, input) → newState → λ(newState) → outputs
 ```
+
+Key properties:
+- **δ (delta)**: Transition function - pure, no side effects
+- **λ (lambda)**: Output function - handles I/O based on state
+- **Deterministic**: Same input + state always produces same result
+- **Moore property**: Outputs depend only on state, not input
 
 ## Core Concepts
 
-### 1. Put All State in One Place
+### 1. Define Your State Space Q
 
-Instead of scattered variables:
+Instead of scattered variables, define a finite set of states:
 
 ```cpp
 // Bad - state everywhere
-int temperature;
-bool alarm_on;
-unsigned long last_reading;
-```
+int led_mode = 0;
+bool wifi_connecting = false;
+bool has_credentials = true;
 
-Put it all together:
+// Good - finite state space
+enum SystemState {
+  STATE_IDLE,
+  STATE_CONNECTING_WIFI,
+  STATE_CONNECTED,
+  STATE_ERROR
+};
 
-```cpp
-// Good - single source of truth
 struct AppState {
-  int temperature;
-  bool alarmOn;
-  unsigned long lastReading;
-};
-AppState g_state;
-```
-
-### 2. Use Actions to Describe What Happened
-
-Instead of directly changing variables, describe what happened:
-
-```cpp
-enum ActionType {
-  BUTTON_PRESSED,
-  TEMPERATURE_READ,
-  ALARM_TRIGGERED
-};
-
-struct Action {
-  ActionType type;
-  int value;  // for temperature readings, etc.
-  
-  static Action buttonPressed() {
-    Action a;
-    a.type = BUTTON_PRESSED;
-    return a;
-  }
+  SystemState mode;
+  Credentials credentials;
+  unsigned long lastUpdate;
 };
 ```
 
-### 3. Use Pure Functions to Update State
+### 2. Define Your Input Alphabet Σ
 
-A pure function always returns the same output for the same input:
-
-```cpp
-AppState reduce(const AppState& state, const Action& action) {
-  AppState newState = state;  // copy current state
-  
-  switch (action.type) {
-    case BUTTON_PRESSED:
-      newState.alarmOn = !state.alarmOn;  // toggle alarm
-      break;
-    case TEMPERATURE_READ:
-      newState.temperature = action.value;
-      break;
-  }
-  
-  return newState;  // return new state, don't modify old one
-}
-```
-
-### 4. Handle I/O Separately
-
-Don't mix hardware operations with state logic:
+Enumerate all possible inputs to your system:
 
 ```cpp
-void handleSideEffects(const AppState& oldState, const AppState& newState) {
-  // Only touch hardware when state actually changed
-  if (newState.alarmOn != oldState.alarmOn) {
-    digitalWrite(BUZZER_PIN, newState.alarmOn ? HIGH : LOW);
-  }
-  
-  if (newState.temperature != oldState.temperature) {
-    Serial.print("Temperature: ");
-    Serial.println(newState.temperature);
-  }
-}
-```
-
-## Building Your First Redux Arduino App
-
-Let's build a simple LED controller:
-
-### Step 1: Define Your State
-
-What does your app need to remember?
-
-```cpp
-enum LedMode {
-  LED_OFF,
-  LED_SOLID,
-  LED_BLINK
+enum InputType {
+  INPUT_BUTTON_PRESSED,
+  INPUT_WIFI_CONNECTED,
+  INPUT_WIFI_FAILED,
+  INPUT_TIMER_EXPIRED,
+  INPUT_USER_COMMAND
 };
 
-struct LedState {
-  LedMode mode;
-  int brightness;
-  unsigned long lastBlink;
-  
-  LedState() : mode(LED_OFF), brightness(128), lastBlink(0) {}
+struct Input {
+  InputType type;
+  // Additional data for specific inputs
+  int buttonPin;
+  char command[32];
 };
 ```
 
-### Step 2: Define Your Actions
+### 3. Write Pure Transition Function δ
 
-What can happen to change the state?
-
-```cpp
-enum LedActionType {
-  BUTTON_PRESS,
-  TIMER_TICK,
-  BRIGHTNESS_CHANGE
-};
-
-struct LedAction {
-  LedActionType type;
-  int value;
-  
-  static LedAction buttonPress() {
-    LedAction a;
-    a.type = BUTTON_PRESS;
-    return a;
-  }
-  
-  static LedAction tick() {
-    LedAction a;
-    a.type = TIMER_TICK;
-    return a;
-  }
-  
-  static LedAction setBrightness(int brightness) {
-    LedAction a;
-    a.type = BRIGHTNESS_CHANGE;
-    a.value = brightness;
-    return a;
-  }
-};
-```
-
-### Step 3: Write Your Reducer
-
-How does each action change the state?
+The transition function must be pure - no I/O, no side effects:
 
 ```cpp
-LedState reduce(const LedState& state, const LedAction& action) {
-  LedState newState = state;
+// δ: Q × Σ → Q
+AppState transitionFunction(const AppState& state, const Input& input) {
+  AppState newState = state;  // Copy current state
+  newState.lastUpdate = millis();
   
-  switch (action.type) {
-    case BUTTON_PRESS:
-      // Cycle through modes
-      if (state.mode == LED_OFF) newState.mode = LED_SOLID;
-      else if (state.mode == LED_SOLID) newState.mode = LED_BLINK;
-      else newState.mode = LED_OFF;
-      break;
-      
-    case TIMER_TICK:
-      if (state.mode == LED_BLINK && millis() - state.lastBlink > 500) {
-        newState.lastBlink = millis();
-        // The LED toggle will happen in side effects
+  switch (state.mode) {
+    case STATE_IDLE:
+      if (input.type == INPUT_BUTTON_PRESSED) {
+        newState.mode = STATE_CONNECTING_WIFI;
       }
       break;
       
-    case BRIGHTNESS_CHANGE:
-      newState.brightness = constrain(action.value, 0, 255);
+    case STATE_CONNECTING_WIFI:
+      if (input.type == INPUT_WIFI_CONNECTED) {
+        newState.mode = STATE_CONNECTED;
+      } else if (input.type == INPUT_WIFI_FAILED) {
+        newState.mode = STATE_ERROR;
+      }
       break;
+      
+    // ... other states
   }
   
-  return newState;
+  return newState;  // Return new state, never modify input
 }
 ```
 
-### Step 4: Handle Hardware
+### 4. Handle I/O in Output Function λ
 
-Update LEDs and other hardware based on state changes:
+All side effects happen in the output function. 
+
+**Note**: Our implementation differs from the pure mathematical Moore machine model for practical reasons:
+
+**Pure Mathematical Model:**
+```cpp
+void outputFunction(const AppState& currentState)  // λ: Q → Γ
+```
+- Takes only current state
+- Produces outputs in alphabet Γ (LED signals, sounds, etc.)
+- No return value needed
+
+**Our Practical Implementation:**
+```cpp
+Input outputFunction(const AppState& oldState, const AppState& newState)
+```
+- Takes both old and new state (for state entry actions)
+- Returns optional follow-up Input (from Σ, not Γ)
+- Handles both true Moore outputs (I/O) AND input generation
+
+**Why the differences:**
+
+1. **State entry actions**: We need `oldState` to detect transitions and perform actions only when entering a state (like starting WiFi connection only once, not continuously)
+
+2. **Follow-up inputs**: Starting async operations often needs to set up timeouts or generate events - returning an Input lets us feed these back into the machine
+
+3. **Practical I/O**: The actual I/O operations (`digitalWrite`, `Serial.print`) are the true Moore outputs (Γ), but we also need to handle the practical concerns of embedded programming
+
+So our output function does **two jobs**:
+- **Moore outputs (Γ)**: The I/O side effects based on current state  
+- **Input generation (Σ)**: Optional follow-up events for async operations
 
 ```cpp
-void handleLedSideEffects(const LedState& oldState, const LedState& newState) {
-  bool ledShouldBeOn = false;
-  
+// λ: Q → Γ (generates follow-up inputs)
+Input outputFunction(const AppState& oldState, const AppState& newState) {
+  // Update LEDs based on current state (Moore property)
   switch (newState.mode) {
-    case LED_SOLID:
-      ledShouldBeOn = true;
+    case STATE_IDLE:
+      digitalWrite(LED_PIN, LOW);
       break;
-    case LED_BLINK:
-      ledShouldBeOn = (millis() / 500) % 2;
+    case STATE_CONNECTING_WIFI:
+      digitalWrite(LED_PIN, millis() % 500 < 250);  // Blink
       break;
-    case LED_OFF:
-      ledShouldBeOn = false;
+    case STATE_CONNECTED:
+      digitalWrite(LED_PIN, HIGH);
       break;
   }
   
-  if (ledShouldBeOn) {
-    analogWrite(LED_PIN, newState.brightness);
-  } else {
-    analogWrite(LED_PIN, 0);
+  // Initiate side effects when entering new states
+  if (oldState.mode != STATE_CONNECTING_WIFI && 
+      newState.mode == STATE_CONNECTING_WIFI) {
+    WiFi.begin(newState.credentials.ssid, newState.credentials.pass);
+    return Input::wifiConnectionStarted();  // Follow-up input
   }
+  
+  return Input::none();  // No follow-up needed
 }
 ```
 
-### Step 5: Read Events
-
-Convert button presses and timers into actions:
+### 5. Create and Use Moore Machine
 
 ```cpp
-LedAction readEvents() {
-  static bool lastButtonState = HIGH;
-  bool buttonState = digitalRead(BUTTON_PIN);
-  
-  // Button pressed (with simple debouncing)
-  if (lastButtonState == HIGH && buttonState == LOW) {
-    lastButtonState = buttonState;
-    delay(50);  // simple debounce
-    return LedAction::buttonPress();
-  }
-  lastButtonState = buttonState;
-  
-  // Always tick to handle timing
-  return LedAction::tick();
-}
-```
+#include <MooreArduino.h>
+using namespace MooreArduino;
 
-### Step 6: Put It All Together
-
-```cpp
-LedState g_ledState;
+// Create Moore machine instance
+MooreMachine<AppState, Input> machine(transitionFunction, AppState());
 
 void setup() {
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  Serial.begin(9600);
+  // Set up output function and observers
+  machine.setOutputFunction(outputFunction);
+  machine.addStateObserver(logStateChanges);
 }
 
 void loop() {
-  LedAction action = readEvents();
+  // Read inputs from environment
+  Input input = readEnvironment();
   
-  LedState oldState = g_ledState;
-  g_ledState = reduce(g_ledState, action);
-  
-  handleLedSideEffects(oldState, g_ledState);
+  // Process through Moore machine
+  if (input.type != INPUT_NONE) {
+    machine.step(input);
+  }
   
   delay(10);
 }
 ```
 
-## Why This Works
+## State Observers
 
-**Predictable**: Same action + same state = same result, every time.
+### What Are Observers?
 
-**Debuggable**: Print the action and state to see exactly what's happening.
-
-**Testable**: Your reducer is just a function - easy to test.
-
-**Scalable**: Add new features by adding actions and updating the reducer.
-
-## Common Patterns
-
-### Timers
+State observers are read-only functions that get called whenever the state changes. They're useful for debugging, logging, metrics, and notifying external systems without affecting the core state machine logic.
 
 ```cpp
-struct Timer {
-  unsigned long interval;
-  unsigned long lastTrigger;
-  bool active;
-  
-  Timer(unsigned long ms) : interval(ms), lastTrigger(0), active(false) {}
-  
-  void start() {
-    lastTrigger = millis();
-    active = true;
-  }
-  
-  bool expired() {
-    return active && (millis() - lastTrigger >= interval);
-  }
-  
-  void reset() { active = false; }
-};
-```
-
-### Button Debouncing
-
-```cpp
-struct Button {
-  int pin;
-  bool lastState;
-  unsigned long lastChange;
-  
-  Button(int p) : pin(p), lastState(HIGH), lastChange(0) {
-    pinMode(pin, INPUT_PULLUP);
-  }
-  
-  bool pressed() {
-    bool currentState = digitalRead(pin);
-    if (currentState != lastState && millis() - lastChange > 50) {
-      lastState = currentState;
-      lastChange = millis();
-      return currentState == LOW;  // pressed
-    }
-    return false;
-  }
-};
-```
-
-### State Machine Validation
-
-```cpp
-bool validTransition(AppMode from, AppMode to) {
-  switch (from) {
-    case MODE_IDLE:
-      return to == MODE_RUNNING || to == MODE_SETUP;
-    case MODE_RUNNING:
-      return to == MODE_IDLE || to == MODE_ERROR;
-    case MODE_ERROR:
-      return to == MODE_IDLE;
-    default:
-      return false;
+void logStateChanges(const AppState& oldState, const AppState& newState) {
+  if (oldState.mode != newState.mode) {
+    Serial.print("State transition: ");
+    Serial.print(getModeString(oldState.mode));
+    Serial.print(" → ");
+    Serial.println(getModeString(newState.mode));
   }
 }
 ```
 
-## Tips
+### How Observers Differ from Output Functions
 
-**Keep state minimal**: Only store what you can't calculate from other data.
+**Output Functions λ:**
+- Handle I/O based on current state (Moore property)
+- Can return follow-up inputs
+- Are part of the core state machine operation
+- Should perform necessary side effects
 
-**Make actions descriptive**: `RETRY_CONNECTION` is better than `SET_FLAG_TRUE`.
+**Observers:**
+- Only monitor state changes
+- Cannot return inputs or affect the machine
+- Are optional debugging/monitoring tools
+- Called after transitions are complete
 
-**Don't put I/O in reducers**: Keep them pure for easy testing.
+### Adding Multiple Observers
 
-**Use enums**: They're safer than magic numbers.
+You can add multiple observers for different purposes:
 
-**Start simple**: Add complexity gradually.
-
-## Memory Management
-
-Arduino has limited RAM. Some tips:
-
-**Use stack allocation**:
 ```cpp
-void processData() {
-  char buffer[64];  // allocated on stack, automatically cleaned up
-  // don't use malloc/new unless you have to
+void debugObserver(const AppState& old, const AppState& new) {
+  Serial.print("Debug: transition at ");
+  Serial.println(millis());
+}
+
+void metricsObserver(const AppState& old, const AppState& new) {
+  transitionCount++;
+  lastTransitionTime = millis();
+}
+
+void apiObserver(const AppState& old, const AppState& new) {
+  // Notify external system
+  sendStateUpdate(new.mode);
+}
+
+void setup() {
+  machine.setOutputFunction(outputFunction);
+  machine.addStateObserver(debugObserver);
+  machine.addStateObserver(metricsObserver);
+  machine.addStateObserver(apiObserver);
 }
 ```
 
-**Fixed-size strings**:
+### Common Observer Use Cases
+
+- **Debugging**: Log all state transitions during development
+- **Metrics**: Count transitions, measure timing, track usage
+- **External APIs**: Notify servers or other devices of state changes
+- **Data logging**: Record state history to storage
+- **User feedback**: Show status messages or notifications
+- **Testing**: Verify expected state transitions during automated tests
+
 ```cpp
-struct Config {
-  char ssid[32];     // fixed size, predictable memory use
-  char password[64];
+// Example: Comprehensive logging observer
+void fullStateLogger(const AppState& oldState, const AppState& newState) {
+  if (oldState.mode != newState.mode) {
+    Serial.print("[");
+    Serial.print(millis());
+    Serial.print("] ");
+    Serial.print(getModeString(oldState.mode));
+    Serial.print(" → ");
+    Serial.print(getModeString(newState.mode));
+    Serial.print(" (counter: ");
+    Serial.print(newState.counter);
+    Serial.println(")");
+  }
+}
+```
+
+**Key principle**: Observers are for watching and reacting to state changes, not for controlling the state machine itself.
+
+## State Transition Design
+
+### Plan Your States
+
+Think carefully about your finite state space Q:
+
+```cpp
+// LED Controller example
+enum LEDState {
+  LED_OFF,
+  LED_ON, 
+  LED_BLINK_SLOW,
+  LED_BLINK_FAST,
+  LED_FADE
 };
 ```
 
-**Avoid String objects in state**:
-```cpp
-// Use for temporary operations only
-String command = Serial.readStringUntil('\n');
-command.trim();
-// Then convert to char array for storage
-command.toCharArray(config.ssid, sizeof(config.ssid));
+### Map Valid Transitions
+
+Not all transitions are valid. Document your state machine:
+
+```
+LED_OFF → LED_ON (button press)
+LED_ON → LED_BLINK_SLOW (button press)  
+LED_BLINK_SLOW → LED_BLINK_FAST (button press)
+LED_BLINK_FAST → LED_OFF (button press)
+Any state → LED_OFF (timeout)
 ```
 
-## Common Mistakes
+### Handle Invalid Inputs
 
-**Side effects in reducers**:
+Your transition function should handle unexpected inputs gracefully:
+
 ```cpp
-// DON'T do this
-AppState reduce(const AppState& state, const Action& action) {
+AppState transitionFunction(const AppState& state, const Input& input) {
   AppState newState = state;
-  if (action.type == BUTTON_PRESSED) {
-    digitalWrite(LED_PIN, HIGH);  // Side effect! Wrong place!
-    newState.ledOn = true;
+  
+  switch (state.mode) {
+    case LED_OFF:
+      if (input.type == INPUT_BUTTON_PRESS) {
+        newState.mode = LED_ON;
+      }
+      // Ignore other inputs when OFF
+      break;
+      
+    default:
+      // Log unexpected state
+      Serial.println("Unknown state in transition function");
+      break;
   }
+  
   return newState;
 }
 ```
 
-**Forgetting the default case**:
-```cpp
-// Always handle unknown actions
-switch (action.type) {
-  case ACTION_ONE:
-    // handle it
-    break;
-  default:
-    // do nothing, but be explicit about it
-    break;
-}
-```
+## Testing Your Moore Machine
 
-**Blocking in the main loop**:
-```cpp
-// Don't do this
-void loop() {
-  if (needsCredentials) {
-    // This blocks everything else!
-    String ssid = promptForSSID();  // blocking call
-  }
-  // ... rest of loop
-}
-```
-
-## Testing Your Reducer
+Moore machines are easy to test because they're pure functions:
 
 ```cpp
-void testButtonToggle() {
-  AppState state;
-  state.ledOn = false;
+void testLEDTransitions() {
+  AppState state = { LED_OFF, 0 };
   
-  Action action = Action::buttonPressed();
-  AppState result = reduce(state, action);
+  // Test: button press should turn LED on
+  Input buttonPress = Input::buttonPressed();
+  AppState newState = transitionFunction(state, buttonPress);
   
-  if (result.ledOn) {
-    Serial.println("✓ Button toggle test passed");
-  } else {
-    Serial.println("✗ Button toggle test failed");
+  assert(newState.mode == LED_ON);
+  Serial.println("✓ Button press turns LED on");
+  
+  // Test: invalid input should be ignored
+  Input invalidInput = Input::wifiConnected();
+  AppState unchanged = transitionFunction(state, invalidInput);
+  
+  assert(unchanged.mode == LED_OFF);
+  Serial.println("✓ Invalid inputs ignored");
+}
+```
+
+## Common Patterns
+
+### Timer-Based State Changes
+
+```cpp
+struct AppState {
+  SystemMode mode;
+  unsigned long stateEntryTime;
+  unsigned long timeout;
+};
+
+AppState transitionFunction(const AppState& state, const Input& input) {
+  AppState newState = state;
+  
+  // Check for timeout in any state
+  if (input.type == INPUT_TICK) {
+    unsigned long elapsed = millis() - state.stateEntryTime;
+    if (elapsed > state.timeout) {
+      newState.mode = STATE_TIMEOUT;
+      newState.stateEntryTime = millis();
+    }
+  }
+  
+  // Handle state entry
+  if (newState.mode != state.mode) {
+    newState.stateEntryTime = millis();
+    newState.timeout = getTimeoutForState(newState.mode);
+  }
+  
+  return newState;
+}
+```
+
+### Multi-Device Coordination
+
+```cpp
+struct SystemState {
+  LEDMode ledMode;
+  WiFiMode wifiMode;
+  SensorMode sensorMode;
+  bool systemEnabled;
+};
+
+// Coordinate multiple subsystems
+AppState transitionFunction(const AppState& state, const Input& input) {
+  AppState newState = state;
+  
+  if (input.type == INPUT_SYSTEM_SHUTDOWN) {
+    // Coordinated shutdown
+    newState.ledMode = LED_OFF;
+    newState.wifiMode = WIFI_DISCONNECTED;
+    newState.sensorMode = SENSOR_SLEEP;
+    newState.systemEnabled = false;
+  }
+  
+  return newState;
+}
+```
+
+## Debugging Tips
+
+### Add State Logging
+
+```cpp
+void logStateChanges(const AppState& oldState, const AppState& newState) {
+  if (oldState.mode != newState.mode) {
+    Serial.print("State: ");
+    Serial.print(getStateName(oldState.mode));
+    Serial.print(" → ");
+    Serial.println(getStateName(newState.mode));
   }
 }
 ```
 
-This pattern makes Arduino code much more manageable. Start with something simple and grow from there. Your future self will thank you.
+### Visualize State Machine
+
+Draw your state machine on paper or use tools like:
+- State transition diagrams
+- State tables
+- Timing diagrams
+
+### Use Assertions
+
+```cpp
+AppState transitionFunction(const AppState& state, const Input& input) {
+  // Validate state invariants
+  assert(state.mode >= 0 && state.mode < STATE_COUNT);
+  assert(state.lastUpdate <= millis());
+  
+  // ... transition logic
+  
+  // Validate output
+  assert(newState.mode >= 0 && newState.mode < STATE_COUNT);
+  return newState;
+}
+```
+
+## When to Use Moore Machines
+
+Moore machines work well for:
+- **State-heavy systems**: Multiple modes, complex coordination
+- **Safety-critical code**: Predictable, testable behavior
+- **User interfaces**: Button handling, menu systems
+- **Communication protocols**: Connection states, handshakes
+- **Embedded control**: Motor control, sensor management
+
+Moore machines might be overkill for:
+- Simple linear programs
+- Pure computational tasks
+- Systems with minimal state
+
+## Mathematical Properties
+
+Moore machines have useful mathematical properties:
+
+- **Deterministic**: δ(q, σ) always produces the same result
+- **Finite**: Only finitely many states and inputs
+- **Memoryless**: Only current state matters, not history
+- **Composable**: Multiple machines can be combined
+- **Analyzable**: Can prove properties about behavior
+
+This mathematical foundation makes your Arduino code more reliable and easier to reason about than traditional imperative programming approaches.
+
+## Further Reading
+
+- Automata theory textbooks
+- Formal verification techniques  
+- State machine design patterns
+- Real-time systems programming
