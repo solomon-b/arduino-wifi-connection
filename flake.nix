@@ -40,16 +40,16 @@
 
         packages = rec {
           build = pkgs.writeShellScriptBin "build" ''
-            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga --libraries . examples/WiFiManager
-          '';
-
-          build2 = pkgs.writeShellScriptBin "build" ''
-            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga --libraries . examples/SimpleLED
+            EXAMPLE="''${1:-WiFiManager}"
+            echo "Building example: $EXAMPLE"
+            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga --libraries . examples/$EXAMPLE
           '';
 
           load = pkgs.writeShellScriptBin "load" ''
-            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga --libraries . examples/WiFiManager
-            ${arduino-cli}/bin/arduino-cli upload --port /dev/ttyACM0 --fqbn arduino:mbed_giga:giga examples/WiFiManager
+            EXAMPLE="''${1:-WiFiManager}"
+            echo "Building and uploading example: $EXAMPLE"
+            ${arduino-cli}/bin/arduino-cli compile --warnings all --fqbn arduino:mbed_giga:giga --libraries . examples/$EXAMPLE
+            ${arduino-cli}/bin/arduino-cli upload --port /dev/ttyACM0 --fqbn arduino:mbed_giga:giga examples/$EXAMPLE
           '';
 
           monitor = pkgs.writeShellScriptBin "monitor" ''
@@ -70,7 +70,6 @@
 
         apps = {
           build = flake-utils.lib.mkApp { drv = self.packages.${system}.build; };
-          build2 = flake-utils.lib.mkApp { drv = self.packages.${system}.build2; };
           load = flake-utils.lib.mkApp { drv = self.packages.${system}.load; };
           monitor = flake-utils.lib.mkApp { drv = self.packages.${system}.monitor; };
         };
