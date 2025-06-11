@@ -105,6 +105,16 @@ Input readEvents() {
     return parseUserInput(input, state.mode);  // Convert char to Input
   }
   
+  // Check for WiFi status changes (hardware polling happens here, not in transition function)
+  int currentWifiStatus = WiFi.status();
+  if (currentWifiStatus != state.wifiStatus) {
+    Serial.print("DEBUG: WiFi status changed from ");
+    Serial.print(state.wifiStatus);
+    Serial.print(" to ");
+    Serial.println(currentWifiStatus);
+    return Input::wifiStatusChanged(currentWifiStatus);
+  }
+  
   // Check if tick timer has expired
   if (g_tickTimer.expired()) {
     g_tickTimer.restart();

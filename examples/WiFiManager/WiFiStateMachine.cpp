@@ -83,15 +83,12 @@ AppState transitionFunction(const AppState& state, const Input& input) {
       return newState;
       
     case INPUT_TICK: {
-      // Periodic status check - poll WiFi hardware
-      int currentWifiStatus = WiFi.status();
-      if (currentWifiStatus != newState.wifiStatus) {
-        // WiFi status changed - update state accordingly
-        newState.wifiStatus = currentWifiStatus;
-        if (currentWifiStatus == WL_CONNECTED && newState.mode != MODE_CONNECTED) {
-          newState.mode = MODE_CONNECTED;    // Hardware connected
-        } else if (currentWifiStatus != WL_CONNECTED && newState.mode == MODE_CONNECTED) {
-          newState.mode = MODE_DISCONNECTED; // Hardware disconnected
+      // Connection timeout check (pure logic based on state)
+      if (newState.mode == MODE_CONNECTING) {
+        unsigned long currentTime = millis();
+        if (currentTime - newState.lastUpdate > 30000) { // 30 second timeout
+          DEBUG_PRINTLN("DEBUG: Connection timeout, switching to disconnected");
+          newState.mode = MODE_DISCONNECTED;
         }
       }
       return newState;

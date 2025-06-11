@@ -171,27 +171,7 @@ void setup() {
 void loop() {
   const AppState& state = g_machine.getState();
   
-  // Debug logging of current state (only when DEBUG_ENABLED=1)
-  DEBUG_PRINT("DEBUG: Loop iteration, mode=");
-  DEBUG_PRINT(state.mode);
-  DEBUG_PRINT(", shouldReconnect=");
-  DEBUG_PRINTLN(state.shouldReconnect);
-  
-  // 1. Get current effect from Moore machine λ: Q → Γ
-  Output effect = g_machine.getCurrentOutput();
-  
-  // 2. Execute effect (handle I/O) and get follow-up input
-  Input followUpInput = executeEffect(effect);
-  
-  // 3. Process follow-up input if needed
-  if (followUpInput.type != INPUT_NONE) {
-    DEBUG_PRINT("DEBUG: Follow-up input type=");
-    DEBUG_PRINTLN(followUpInput.type);
-    g_machine.step(followUpInput);
-    return; // Return early to avoid processing user input in same loop
-  }
-  
-  // 4. Read events from environment (user input, hardware status)
+  // 1. Read events from environment (user input, hardware status)
   Input input = readEvents();
   
   if (input.type != INPUT_NONE) {
@@ -208,7 +188,6 @@ void loop() {
         DEBUG_PRINTLN("DEBUG: About to process credentialsEntered input");
         g_machine.step(Input::credentialsEntered(newCreds));  // Process entered credentials
         DEBUG_PRINTLN("DEBUG: After processing credentialsEntered input");
-        // Continue loop - don't return early
       } else {
         // Credential entry failed - revert to previous state
         g_machine.step(Input::tick());  // Tick will update mode based on WiFi status
@@ -217,7 +196,21 @@ void loop() {
       // Normal case - process input through Moore machine
       g_machine.step(input);
     }
+    
+    // Execute effect when state changes (after processing input)
+    Output effect = g_machine.getCurrentOutput();
+    Input followUpInput = executeEffect(effect);
+    
+    // Process follow-up input if needed
+    if (followUpInput.type != INPUT_NONE) {
+      DEBUG_PRINT("DEBUG: Follow-up input type=");
+      DEBUG_PRINTLN(followUpInput.type);
+      g_machine.step(followUpInput);
+    }
   }
+  
+  // Always update LEDs (needed for blinking and responsive indicators)
+  updateLEDs(state.mode);
   
   delay(10);  // Small delay to prevent overwhelming the system
 }
