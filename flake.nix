@@ -39,6 +39,23 @@
           };
 
         packages = rec {
+          # Expose MooreArduino library for other projects
+          moore-arduino = pkgs.stdenv.mkDerivation {
+            pname = "moore-arduino";
+            version = "1.0.0";
+            src = ./MooreArduino;
+            
+            installPhase = ''
+              mkdir -p $out
+              cp -r * $out/
+            '';
+            
+            meta = {
+              description = "Moore finite state machine library for Arduino";
+              homepage = "https://github.com/yourusername/moore-arduino";
+              license = pkgs.lib.licenses.mit;
+            };
+          };
           build = pkgs.writeShellScriptBin "build" ''
             EXAMPLE="''${1:-WiFiManager}"
             echo "Building example: $EXAMPLE"
@@ -61,6 +78,17 @@
               (arduino-nix.latestVersion ADS1X15)
              # (arduino-nix.latestVersion pkgs.arduinoLibraries."WiFiS3")
             ];
+
+            packages = with pkgs.arduinoPackages; [
+              platforms.arduino.mbed_giga."4.2.4"
+            ];
+          };
+          
+          # Arduino CLI with MooreArduino library included
+          arduino-cli-with-moore = pkgs.wrapArduinoCLI {
+            libraries = with pkgs.arduinoLibraries; [
+              (arduino-nix.latestVersion ADS1X15)
+            ] ++ [ moore-arduino ];
 
             packages = with pkgs.arduinoPackages; [
               platforms.arduino.mbed_giga."4.2.4"
